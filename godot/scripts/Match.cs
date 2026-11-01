@@ -49,6 +49,7 @@ public partial class Match : Node2D
     {
         _font = ThemeDB.FallbackFont;
         Start((ulong)Random.Shared.NextInt64(1, 1_000_000));
+        GD.Print($"Planetfall sim match started: seed {_seed}, {_s.Map.TileCount} tiles");   // CI smoke test greps "Planetfall sim "
     }
 
     private void Start(ulong seed)

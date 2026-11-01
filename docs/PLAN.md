@@ -385,6 +385,13 @@ Profile release builds; CI fails if the mean sim tick exceeds budget.
 - **M2c Opponents + victory:** utility AI rival with hunting behaviour, static hostile minor, capital-hold capitulation, Surrender command. Tests: AI-vs-AI matches terminate with no stuck stacks.
 - **M2d Godot client:** renderer from snapshots, click/Shift-queue/selection, HUD, pause and speed, Surrender button, `Main` scene replaced by the match.
 
+**M2 rules added after the first playtest requests** (all in `sim/`, covered by tests):
+- **Encirclement:** a pocket of non-owned tiles whose whole border is yours and linked to your capital is captured automatically (not if an enemy stack is inside or it holds another major's capital; map edge counts as wall).
+- **Combat modifiers:** attackers take +15% damage; +25% damage per extra distinct attacking tile (max 4 fronts); entrenchment gives defenders +10% per 10 s stood still after the first 10 s, up to +50%, lost on moving, frozen while attacked.
+- **Spawning:** new stacks appear only on your capital or an owned deposit ("mine"), never on a tile with an enemy stack; the site with the fewest friendly stacks is chosen. No open site means no purchase and supply keeps accumulating.
+- **Rival cap:** `Player.MaxStacks` limits the AI (client sets 4) as a difficulty knob.
+- Note: the M2 done-test "+50% capture" means "+50% move speed" (capture is instant).
+
 Critical path: M0 → M1 → M2. Nothing after M2 starts until the slice is judged fun.
 
 ---
