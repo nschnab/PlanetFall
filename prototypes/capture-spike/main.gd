@@ -7,6 +7,7 @@ const MARGIN := 20.0
 const COLS := 11
 const ROWS := 8
 const MOVE_DELAY := 1.5    # seconds an order shows its arrow before the hop
+const BATTLE_SLOW := 0.4   # hop speed multiplier while in a fight (enter or leave)
 const WIN_FRAC := 0.75
 
 var seeds: Array[Vector2] = []
@@ -175,12 +176,12 @@ func step(dt: float) -> void:
 				var nb: Array = nbrs[s.tile]
 				s.path = [nb[rng.randi() % nb.size()]]
 				s.wait = rng.randf_range(0.0, 2.0)  # sometimes lingers
-	# battles: same tile, opposite sides
+	# battles: start as soon as a stack begins moving into an enemy tile
 	for i in range(stacks.size()):
 		for j in range(i + 1, stacks.size()):
 			var a = stacks[i]
 			var b = stacks[j]
-			if a.side != b.side and a.tile == b.tile:
+			if fighting(a, b):
 				a.hp -= dt * b.str * 0.12
 				b.hp -= dt * a.str * 0.12
 	var dead := []
@@ -213,13 +214,24 @@ func step(dt: float) -> void:
 	if float(mine) / seeds.size() >= WIN_FRAC:
 		state = 1
 
+func fighting(a: Dictionary, b: Dictionary) -> bool:
+	if a.side == b.side:
+		return false
+	return a.tile == b.tile or a.target == b.tile or b.target == a.tile
+
+func engaged(s: Dictionary) -> bool:
+	for o in stacks:
+		if o != s and fighting(s, o):
+			return true
+	return false
+
 func advance(s: Dictionary, dt: float) -> void:
 	if s.target == -1:
 		if s.path.is_empty():
 			return
 		s.target = s.path.pop_front()
 		s.timer = 0.0
-	s.timer += dt
+	s.timer += dt * (BATTLE_SLOW if engaged(s) else 1.0)
 	if s.timer >= MOVE_DELAY:
 		s.tile = s.target
 		s.target = -1
@@ -270,17 +282,14 @@ func _draw() -> void:
 			prev = centroid(tl)
 	for s in stacks:
 		if s.target != -1:
-			draw_arrow(centroid(s.tile), centroid(s.target), s.timer / MOVE_DELAY, Color(1, 1, 1) if s.side == 1 else Color(1, 0.7, 0.2))
+			draw_arrow(centroid(s.tile), centroid(s.target), s.timer / MOVE_DELAY, Color(1, 0.9, 0.2) if engaged(s) else (Color(1, 1, 1) if s.side == 1 else Color(1, 0.7, 0.2)))
 	var font := ThemeDB.fallback_font
 	for s in stacks:
 		var pos := stack_pos(s)
 		draw_circle(pos, 15, Color.BLACK)
 		draw_circle(pos, 13, side_color(s.side).lightened(0.25))
 		draw_string(font, pos + Vector2(-8, 6), str(ceili(s.hp)), HORIZONTAL_ALIGNMENT_CENTER, 16, 16, Color.BLACK)
-		var contested := false
-		for o in stacks:
-			if o.side != s.side and o.tile == s.tile:
-				contested = true
+		var contested := engaged(s)
 		if contested:
 			draw_arc(pos, 22, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
 	var mine := 0
