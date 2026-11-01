@@ -13,6 +13,9 @@ public sealed class Player
 
     /// <summary>Alloy in thousandths.</summary>
     public long Supply { get; set; }
+
+    /// <summary>Minor powers hold ground and never expand, buy stacks, or count for victory.</summary>
+    public bool Minor { get; init; }
 }
 
 public sealed class GameState
@@ -27,6 +30,13 @@ public sealed class GameState
     public int Tick { get; set; }
     public int NextStackId { get; set; } = 1;
 
+    /// <summary>Winning player id, or -1 while the match is on.</summary>
+    public int Winner { get; set; } = -1;
+    public bool Over => Winner != -1;
+
+    /// <summary>Consecutive ticks an enemy has held each player's capital.</summary>
+    public int[] CapitalHeld { get; set; } = Array.Empty<int>();
+
     public static GameState New(MapData map, params Leader[] leaders)
     {
         if (leaders.Length > map.Spawns.Length) throw new ArgumentException("More players than spawns");
@@ -39,7 +49,60 @@ public sealed class GameState
             owner[p.Capital] = p.Id;
             s.AddStack(p.Id, p.Capital, Rules.StartStrength);
         }
+        s.CapitalHeld = new int[players.Length];
         return s;
+    }
+
+    /// <summary>The majors plus a static hostile minor power garrisoning one tile.</summary>
+    public static GameState NewWithMinor(MapData map, int minorTile, int minorStrength, params Leader[] leaders)
+    {
+        var s = New(map, leaders);
+        var minor = new Player
+        {
+            Id = leaders.Length,
+            Leader = Leader.Parse("""{ "id": "minor", "name": "Minor Power" }"""),
+            Capital = minorTile,
+            Minor = true,
+        };
+        var players = s.Players.Append(minor).ToArray();
+        var g = new GameState { Map = map, Players = players, TileOwner = s.TileOwner };
+        g.Stacks.AddRange(s.Stacks);
+        g.NextStackId = s.NextStackId;
+        g.CapitalHeld = new int[players.Length];
+        g.TileOwner[minorTile] = minor.Id;
+        g.AddStack(minor.Id, minorTile, minorStrength);
+        return g;
+    }
+
+    /// <summary>Deposit nearest the map centre that is more than three hops from every spawn.</summary>
+    public static int PickMinorTile(MapData map)
+    {
+        var near = new HashSet<int>();
+        foreach (int sp in map.Spawns)
+        {
+            var frontier = new List<int> { sp };
+            near.Add(sp);
+            for (int d = 0; d < 3; d++)
+            {
+                var next = new List<int>();
+                foreach (int t in frontier)
+                    foreach (int n in map.Neighbors[t])
+                        if (near.Add(n)) next.Add(n);
+                frontier = next;
+            }
+        }
+        long cx = map.CentroidX.Sum(x => (long)x) / map.TileCount;
+        long cy = map.CentroidY.Sum(y => (long)y) / map.TileCount;
+        int best = -1;
+        long bestScore = long.MaxValue;
+        for (int t = 0; t < map.TileCount; t++)
+        {
+            if (near.Contains(t)) continue;
+            long dx = map.CentroidX[t] - cx, dy = map.CentroidY[t] - cy;
+            long score = dx * dx + dy * dy - (map.Deposit[t] ? 1L << 40 : 0);
+            if (score < bestScore) { bestScore = score; best = t; }
+        }
+        return best;
     }
 
     public Stack AddStack(int owner, int tile, int strength)
@@ -61,6 +124,8 @@ public sealed class GameState
     public long Stat(int player, string key, long baseValue) =>
         StatResolver.Resolve(key, baseValue, new IModifierSource[] { Players[player].Leader });
 
+    public IEnumerable<Player> Majors => Players.Where(p => !p.Minor);
+
     public int OwnedTiles(int player) => TileOwner.Count(o => o == player);
 
     /// <summary>FNV-1a over everything that can differ between two runs.</summary>
@@ -76,7 +141,8 @@ public sealed class GameState
             }
         }
 
-        Add(Tick); Add(NextStackId);
+        Add(Tick); Add(NextStackId); Add(Winner);
+        foreach (int c in CapitalHeld) Add(c);
         foreach (int o in TileOwner) Add(o);
         foreach (var p in Players) { Add(p.Id); Add(p.Supply); }
         foreach (var s in Stacks)

@@ -14,6 +14,8 @@ public static class Rules
     public const long TileYieldMilli = 20;          // stat: yield.alloy, per owned tile per tick (0.2/s)
     public const int DepositMultiplier = 5;
     public const long StackCostMilli = 20_000;      // stat: build.cost.stack (20 alloy)
+    public const int CapitulationTicks = 600;       // enemy holds your capital this long (60 s) and you capitulate
+    public const int MinorStrength = 8;
 
     public const string StatMoveDelay = "move.delay";
     public const string StatMoveSpeed = "move.speed";

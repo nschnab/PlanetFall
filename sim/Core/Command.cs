@@ -8,3 +8,6 @@ public sealed record MoveCommand(int Player, int StackId, int TargetTile, bool Q
 
 /// <summary>Cancel the route and any hop that has not completed.</summary>
 public sealed record StopCommand(int Player, int StackId) : Command(Player);
+
+/// <summary>Give up. The other major receives every tile and the match ends.</summary>
+public sealed record SurrenderCommand(int Player) : Command(Player);

@@ -10,3 +10,5 @@ public sealed record StacksMerged(int IntoStackId, int AbsorbedStackId) : SimEve
 public sealed record StackRetreating(int StackId, int ToTile) : SimEvent;
 public sealed record HopStarted(int StackId, int From, int To) : SimEvent;
 public sealed record HopCompleted(int StackId, int Tile) : SimEvent;
+public sealed record PlayerDefeated(int Player, string Reason) : SimEvent;
+public sealed record MatchOver(int Winner) : SimEvent;

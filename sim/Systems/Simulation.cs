@@ -13,20 +13,24 @@ public static class Simulation
     public static List<SimEvent> Step(GameState s, IReadOnlyList<Command> commands)
     {
         var events = new List<SimEvent>();
-        ApplyCommands(s, commands);
+        if (s.Over) return events;
+        int surrendered = ApplyCommands(s, commands);
         Movement(s, events);
         Combat(s, events);
         Merge(s, events);
         Capture(s, events);
         Economy(s, events);
+        Victory(s, events, surrendered);
         s.Tick++;
         return events;
     }
 
     // ---- commands -------------------------------------------------------------------------
 
-    private static void ApplyCommands(GameState s, IReadOnlyList<Command> commands)
+    /// <summary>Returns the id of a player who surrendered this tick, or -1.</summary>
+    private static int ApplyCommands(GameState s, IReadOnlyList<Command> commands)
     {
+        int surrendered = -1;
         foreach (var cmd in commands)
         {
             switch (cmd)
@@ -58,6 +62,10 @@ public static class Simulation
                     }
                     break;
                 }
+                case SurrenderCommand sc:
+                    if (surrendered == -1 && sc.Player >= 0 && sc.Player < s.Players.Length && !s.Players[sc.Player].Minor)
+                        surrendered = sc.Player;
+                    break;
                 case StopCommand c:
                 {
                     var st = s.FindStack(c.StackId);
@@ -69,6 +77,7 @@ public static class Simulation
                 }
             }
         }
+        return surrendered;
     }
 
     // ---- fights ---------------------------------------------------------------------------
@@ -213,7 +222,7 @@ public static class Simulation
 
     private static void Economy(GameState s, List<SimEvent> events)
     {
-        foreach (var p in s.Players)
+        foreach (var p in s.Majors)
         {
             long income = 0;
             long tileYield = s.Stat(p.Id, Rules.StatYield, Rules.TileYieldMilli);
@@ -229,5 +238,34 @@ public static class Simulation
             var ns = s.AddStack(p.Id, at, Rules.NewStackStrength);
             events.Add(new StackSpawned(ns.Id, p.Id, at));
         }
+    }
+
+    // ---- victory --------------------------------------------------------------------------
+
+    /// <summary>
+    /// A major loses when an enemy holds its capital for CapitulationTicks, when it has no tiles
+    /// and no stacks, or when it surrenders. The other major wins and receives its tiles.
+    /// </summary>
+    private static void Victory(GameState s, List<SimEvent> events, int surrendered)
+    {
+        int loser = surrendered;
+        string reason = "surrender";
+
+        foreach (var p in s.Majors)
+        {
+            s.CapitalHeld[p.Id] = s.TileOwner[p.Capital] != p.Id ? s.CapitalHeld[p.Id] + 1 : 0;
+            if (loser != -1) continue;
+            if (s.CapitalHeld[p.Id] >= Rules.CapitulationTicks) { loser = p.Id; reason = "capital held"; }
+            else if (s.OwnedTiles(p.Id) == 0 && !s.Stacks.Any(x => x.Owner == p.Id)) { loser = p.Id; reason = "annihilated"; }
+        }
+        if (loser == -1) return;
+
+        int winner = s.Majors.First(p => p.Id != loser).Id;
+        for (int t = 0; t < s.TileOwner.Length; t++)
+            if (s.TileOwner[t] == loser) s.TileOwner[t] = winner;
+        s.Stacks.RemoveAll(x => x.Owner == loser);
+        s.Winner = winner;
+        events.Add(new PlayerDefeated(loser, reason));
+        events.Add(new MatchOver(winner));
     }
 }
