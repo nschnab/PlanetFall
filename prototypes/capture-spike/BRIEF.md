@@ -19,3 +19,9 @@ KILL / REFACTOR IF:
 Controls: left-click a tile = move there. Space = pause. R = restart.
 Win: own 75% of tiles. Lose: your stack is destroyed (no respawn).
 Run: godot --path prototypes/capture-spike
+
+## Design outcomes (approved by Nolen)
+- Orders show an arrow; after a delay the stack hops in and captures the tile instantly (no capture timer).
+- A fight starts when a hop order into an enemy tile begins, not on arrival.
+- Hops into or out of a fight are slowed (BATTLE_SLOW 0.4x), retreat included.
+- Verdict on keep/kill: pending - see M1 notes.
