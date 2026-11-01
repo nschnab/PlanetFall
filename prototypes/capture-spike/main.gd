@@ -9,6 +9,11 @@ const ROWS := 8
 const MOVE_DELAY := 1.5    # seconds an order shows its arrow before the hop
 const BATTLE_SLOW := 0.4   # hop speed multiplier while in a fight (enter or leave)
 const WIN_FRAC := 0.75
+const INCOME_TILE := 0.2     # supply per second per owned tile
+const DEPOSIT_MULT := 5.0
+const STACK_COST := 20.0
+const NEW_STACK_STR := 5
+const DEPOSITS := 12
 
 var seeds: Array[Vector2] = []
 var polys: Array[PackedVector2Array] = []
@@ -18,7 +23,10 @@ var stacks: Array = []                # dictionaries
 var t := 0.0
 var paused := false
 var state := 0                        # 0 play, 1 win, 2 lose
-var respawn_in := 0.0
+var deposit: PackedByteArray = []
+var supply := [0.0, 0.0, 0.0]
+var capital := [-1, -1, -1]
+var selected = null
 var rng := RandomNumberGenerator.new()
 var hover := -1
 
@@ -68,10 +76,20 @@ func start() -> void:
 	var et := nearest(Vector2(W - 150, H - 120))
 	owner_of[pt] = 1
 	owner_of[et] = 2
+	capital = [-1, pt, et]
+	deposit = PackedByteArray()
+	deposit.resize(n)
+	var placed := 0
+	while placed < DEPOSITS:
+		var d := rng.randi() % n
+		if deposit[d] == 0 and d != pt and d != et:
+			deposit[d] = 1
+			placed += 1
+	supply = [0.0, 0.0, 0.0]
 	stacks = [make_stack(1, pt, 10), make_stack(2, et, 8)]
+	selected = stacks[0]
 	t = 0.0
 	state = 0
-	respawn_in = 0.0
 	paused = false
 
 func make_stack(side: int, tile: int, strength: int) -> Dictionary:
@@ -143,8 +161,19 @@ func find_path(a: int, b: int) -> Array:
 func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT and state == 0:
 		var tl := tile_at(e.position)
-		var s: Dictionary = stacks[0]
-		if tl >= 0 and s.side == 1:
+		if tl < 0:
+			return
+		# clicking a tile with your own stack selects it (repeat clicks cycle through a pile)
+		var here := []
+		for o in stacks:
+			if o.side == 1 and o.tile == tl:
+				here.append(o)
+		if not here.is_empty() and (selected == null or selected.tile != tl or here.size() > 1):
+			var idx := here.find(selected)
+			selected = here[(idx + 1) % here.size()]
+			return
+		if selected != null and stacks.has(selected):
+			var s: Dictionary = selected
 			s.path = find_path(s.tile, tl)
 			# keep a pending hop only if the new route still starts with it
 			if s.target != -1 and (s.path.is_empty() or s.path[0] != s.target):
@@ -168,14 +197,13 @@ func step(dt: float) -> void:
 	t += dt
 	for s in stacks:
 		advance(s, dt)
-	# enemy random walk
+	# enemy AI: each idle stack marches on the nearest tile the enemy does not own
 	for s in stacks:
 		if s.side == 2 and s.target == -1 and s.path.is_empty():
 			s.wait -= dt
 			if s.wait <= 0.0:
-				var nb: Array = nbrs[s.tile]
-				s.path = [nb[rng.randi() % nb.size()]]
-				s.wait = rng.randf_range(0.0, 2.0)  # sometimes lingers
+				s.path = path_to_nearest_foreign(s.tile, 2)
+				s.wait = rng.randf_range(0.5, 2.0)
 	# battles: start as soon as a stack begins moving into an enemy tile
 	for i in range(stacks.size()):
 		for j in range(i + 1, stacks.size()):
@@ -190,14 +218,32 @@ func step(dt: float) -> void:
 			dead.append(s)
 	for s in dead:
 		stacks.erase(s)
-		if s.side == 1:
-			state = 2
-		else:
-			respawn_in = 20.0
-	if respawn_in > 0.0:
-		respawn_in -= dt
-		if respawn_in <= 0.0:
-			stacks.append(make_stack(2, rng.randi() % seeds.size(), 8))
+	if selected != null and not stacks.has(selected):
+		selected = null
+		for o in stacks:
+			if o.side == 1:
+				selected = o
+				break
+	# economy: owned tiles make supply; supply buys a new stack at the capital
+	for side in [1, 2]:
+		var inc := 0.0
+		for i in seeds.size():
+			if owner_of[i] == side:
+				inc += INCOME_TILE * (DEPOSIT_MULT if deposit[i] == 1 else 1.0)
+		supply[side] += inc * dt
+		if supply[side] >= STACK_COST:
+			var at: int = capital[side]
+			if owner_of[at] != side:
+				var own := []
+				for i in seeds.size():
+					if owner_of[i] == side:
+						own.append(i)
+				if own.is_empty():
+					continue
+				at = own[rng.randi() % own.size()]
+			supply[side] -= STACK_COST
+			var ns := make_stack(side, at, NEW_STACK_STR)
+			stacks.append(ns)
 	# instant capture: alone on a tile you do not own
 	for s in stacks:
 		var tl: int = s.tile
@@ -211,8 +257,38 @@ func step(dt: float) -> void:
 	for o in owner_of:
 		if o == 1:
 			mine += 1
+	var theirs := 0
+	for o in owner_of:
+		if o == 2:
+			theirs += 1
 	if float(mine) / seeds.size() >= WIN_FRAC:
 		state = 1
+	elif mine == 0 or float(theirs) / seeds.size() >= WIN_FRAC:
+		state = 2
+
+func path_to_nearest_foreign(from: int, side: int) -> Array:
+	var prev := {from: -1}
+	var q := [from]
+	var goal := -1
+	while not q.is_empty():
+		var c: int = q.pop_front()
+		if c != from and owner_of[c] != side:
+			goal = c
+			break
+		var nb: Array = nbrs[c].duplicate()
+		nb.shuffle()
+		for n in nb:
+			if not prev.has(n):
+				prev[n] = c
+				q.append(n)
+	if goal == -1:
+		return []
+	var path := []
+	var c: int = goal
+	while c != from:
+		path.push_front(c)
+		c = prev[c]
+	return path
 
 func fighting(a: Dictionary, b: Dictionary) -> bool:
 	if a.side == b.side:
@@ -269,13 +345,19 @@ func _draw() -> void:
 		var outline := PackedVector2Array(polys[i])
 		outline.append(polys[i][0])
 		draw_polyline(outline, Color(0, 0, 0, 0.8), 2.0)
+	for i in polys.size():
+		var c := centroid(i)
+		if deposit[i] == 1:
+			draw_colored_polygon(PackedVector2Array([c + Vector2(0, -9), c + Vector2(9, 0), c + Vector2(0, 9), c + Vector2(-9, 0)]), Color(1, 0.85, 0.25))
+		if i == capital[1] or i == capital[2]:
+			draw_rect(Rect2(c - Vector2(11, 11), Vector2(22, 22)), Color.WHITE, false, 3.0)
 	if hover >= 0:
 		var o := PackedVector2Array(polys[hover])
 		o.append(polys[hover][0])
 		draw_polyline(o, Color(1, 1, 1, 0.8), 2.0)
 	# player path
-	if not stacks.is_empty() and stacks[0].side == 1:
-		var p0: Dictionary = stacks[0]
+	if selected != null and stacks.has(selected):
+		var p0: Dictionary = selected
 		var prev := centroid(p0.target) if p0.target != -1 else stack_pos(p0)
 		for tl in p0.path:
 			draw_line(prev, centroid(tl), Color(1, 1, 1, 0.5), 2.0)
@@ -289,6 +371,8 @@ func _draw() -> void:
 		draw_circle(pos, 15, Color.BLACK)
 		draw_circle(pos, 13, side_color(s.side).lightened(0.25))
 		draw_string(font, pos + Vector2(-8, 6), str(ceili(s.hp)), HORIZONTAL_ALIGNMENT_CENTER, 16, 16, Color.BLACK)
+		if s == selected:
+			draw_arc(pos, 19, 0, TAU, 24, Color.WHITE, 2.0)
 		var contested := engaged(s)
 		if contested:
 			draw_arc(pos, 22, 0, TAU, 24, Color(1, 0.9, 0.2), 3.0)
@@ -299,8 +383,8 @@ func _draw() -> void:
 			mine += 1
 		elif o == 2:
 			theirs += 1
-	var txt := "Blue %d  Red %d  / %d    (need %d)    t=%ds%s" % [mine, theirs, seeds.size(), ceili(seeds.size() * WIN_FRAC), int(t), "   PAUSED" if paused else ""]
+	var txt := "Blue %d  Red %d  / %d (need %d)   Supply %d/%d   Red supply %d   t=%ds%s" % [mine, theirs, seeds.size(), ceili(seeds.size() * WIN_FRAC), int(supply[1]), int(STACK_COST), int(supply[2]), int(t), "   PAUSED" if paused else ""]
 	draw_string(font, Vector2(24, 36), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 22)
 	if state != 0:
-		var msg := "YOU WIN" if state == 1 else "STACK DESTROYED"
+		var msg := "YOU WIN" if state == 1 else "DEFEATED"
 		draw_string(font, Vector2(W / 2 - 160, H / 2), msg + "  (R to restart)", HORIZONTAL_ALIGNMENT_LEFT, -1, 32, Color.WHITE)
