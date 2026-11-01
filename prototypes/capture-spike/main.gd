@@ -6,14 +6,14 @@ const H := 720.0
 const MARGIN := 20.0
 const COLS := 11
 const ROWS := 8
-const MOVE_DELAY := 1.5    # seconds an order shows its arrow before the hop
+const MOVE_DELAY := 3.0    # seconds an order shows its arrow before the hop
 const BATTLE_SLOW := 0.4   # hop speed multiplier while in a fight (enter or leave)
 const WIN_FRAC := 0.75
 const INCOME_TILE := 0.2     # supply per second per owned tile
 const DEPOSIT_MULT := 5.0
 const STACK_COST := 20.0
 const NEW_STACK_STR := 5
-const DEPOSITS := 12
+const DEPOSITS := 5
 
 var seeds: Array[Vector2] = []
 var polys: Array[PackedVector2Array] = []
@@ -163,6 +163,16 @@ func _unhandled_input(e: InputEvent) -> void:
 		var tl := tile_at(e.position)
 		if tl < 0:
 			return
+		if Input.is_key_pressed(KEY_SHIFT) and selected != null and stacks.has(selected):
+			# shift+click: extend the route from wherever it currently ends
+			var q: Dictionary = selected
+			var origin: int = q.tile
+			if not q.path.is_empty():
+				origin = q.path[q.path.size() - 1]
+			elif q.target != -1:
+				origin = q.target
+			q.path.append_array(find_path(origin, tl))
+			return
 		# clicking a tile with your own stack selects it (repeat clicks cycle through a pile)
 		var here := []
 		for o in stacks:
@@ -218,6 +228,24 @@ func step(dt: float) -> void:
 			dead.append(s)
 	for s in dead:
 		stacks.erase(s)
+	# friendly stacks that are both idle on one tile merge into a single bigger stack
+	var merged := true
+	while merged:
+		merged = false
+		for i in range(stacks.size()):
+			for j in range(i + 1, stacks.size()):
+				var a = stacks[i]
+				var b = stacks[j]
+				if a.side == b.side and a.tile == b.tile and a.target == -1 and b.target == -1 and a.path.is_empty() and b.path.is_empty():
+					a.str += b.str
+					a.hp += b.hp
+					if selected == b:
+						selected = a
+					stacks.remove_at(j)
+					merged = true
+					break
+			if merged:
+				break
 	if selected != null and not stacks.has(selected):
 		selected = null
 		for o in stacks:
@@ -368,8 +396,9 @@ func _draw() -> void:
 	var font := ThemeDB.fallback_font
 	for s in stacks:
 		var pos := stack_pos(s)
-		draw_circle(pos, 15, Color.BLACK)
-		draw_circle(pos, 13, side_color(s.side).lightened(0.25))
+		var rad := 13.0 + minf(s.hp, 30.0) * 0.3
+		draw_circle(pos, rad + 2, Color.BLACK)
+		draw_circle(pos, rad, side_color(s.side).lightened(0.25))
 		draw_string(font, pos + Vector2(-8, 6), str(ceili(s.hp)), HORIZONTAL_ALIGNMENT_CENTER, 16, 16, Color.BLACK)
 		if s == selected:
 			draw_arc(pos, 19, 0, TAU, 24, Color.WHITE, 2.0)
