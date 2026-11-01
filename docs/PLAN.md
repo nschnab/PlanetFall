@@ -170,6 +170,15 @@ seed ─► 1 Points ─► 2 Voronoi tiles ─► 3 Terrain ─► 4 Adjacency 
 ### Tile state
 `Owner`, `Control[player] 0..1000`, `Fortification 0..3`, `Development 0..3`, `Structure?` (1 slot).
 
+### Rules revision from the M1 spike (supersedes the control meter below for M2)
+The M1 capture spike was judged **keep** with these rules, which M2 implements:
+- **Hop orders:** a Move shows an arrow toward the next tile; after `Stat(move.delay)` (base 3 s) the stack enters it. Routes are paths of single hops; **Shift queues** more hops.
+- **Instant capture:** a stack alone on a tile it does not own captures it on arrival. No capture timer. (Adjacency is implied: you only ever hop to neighbours.)
+- **Fights start with the order:** a hop into an enemy-held tile starts the battle when the order begins, not on arrival. Any stack in a fight, whether entering, leaving or holding, hops at **0.4x** speed (so retreating is slow too).
+- **A reason to hold tiles:** every owned tile makes supply; **deposits are scarce** (about 5 per 88 tiles, 5x yield); supply buys extra stacks at the capital; the AI hunts the nearest tile it does not own, so unguarded tiles are retaken.
+- **Merging:** idle friendly stacks on one tile merge (strength and health add).
+- Open for tuning: income, stack cost, hop delay, `BATTLE_SLOW`. The control meter and the fortification discount below are **deferred**; revisit only if these rules prove too thin.
+
 ### Capture
 - A stack on a tile with **no hostile stacks** ticks control toward its owner: `rate = Stat(capture.rate) × stackCapturePower × terrainMod × (1 − fortification × 0.25)`. Unoccupied tiles slowly bleed control back to their owner.
 - **Adjacency rule:** you may only capture tiles adjacent to your territory. This prevents deep captures; air drops later get their own rule.
@@ -369,6 +378,12 @@ Profile release builds; CI fails if the mean sim tick exceeds budget.
 | **M8** | Presentation | Art brief + manifest; player colour palettes (colour-blind safe); glyphs; border shader; leader portrait placeholder; adaptive music; SFX; UI juice | `create-game-assets`, `shader-programming`, `godot-shaders`, `audio-design`, `game-feel`, `godot-audio` | Glyph contact sheet passes the colour-blind check; music shifts within 2 s of battle |
 | **M9** | Balance, perf, ship prep | Balance passes; perf gates; settings; tutorial; **macOS codesign + notarization** (Developer ID); store builds for both platforms | `performance-optimization`, `godot-export`, `steam-publish` / `itch-publish` | Large map holds 60 FPS on min-spec for **both** platforms (measured release builds, e.g. a low-end Windows laptop + a base M1 Mac); the notarized macOS build opens without a Gatekeeper warning; spawn-slot win rates 45–55% |
 | *v1.1* | Online multiplayer (post-v1) | Lobby, command RPCs, fog-filtered sync, reconnect, speed vote | `godot-multiplayer` (refs), `godot-export` | 4 humans + 4 AI, 60 min, no crash/desync; fogged stacks are absent from packets |
+
+**M2 sub-steps** (each ends with green CI before the next starts):
+- **M2a Map + modifiers:** flat 200-tile map from a seed (jittered points, Lloyd, Voronoi, adjacency, deposits, two spawns, fairness check with bounded retries); `StatResolver`; leader JSON with the no-bonus Field Commander. Tests: same seed gives identical map, fairness holds over 1,000 seeds, a test-only +50% leader changes a stat by exactly 1.5x.
+- **M2b Sim core:** state, `Command`s, 10 Hz tick, hop/fight/capture/economy/merge systems, state hash. Tests: determinism (seed + command log gives the same hash), fight-on-order-start, slowed retreat, merge, supply-buys-stack.
+- **M2c Opponents + victory:** utility AI rival with hunting behaviour, static hostile minor, capital-hold capitulation, Surrender command. Tests: AI-vs-AI matches terminate with no stuck stacks.
+- **M2d Godot client:** renderer from snapshots, click/Shift-queue/selection, HUD, pause and speed, Surrender button, `Main` scene replaced by the match.
 
 Critical path: M0 → M1 → M2. Nothing after M2 starts until the slice is judged fun.
 
