@@ -309,4 +309,41 @@ public class MatchTests
         Assert.True(two > one * 2);
         Assert.True(three > two);
     }
+
+    private static int MineFarFrom(GameState s) =>
+        Enumerable.Range(0, s.Map.TileCount).First(t => s.Map.Deposit[t] && s.Players.All(p => p.Capital != t));
+
+    [Fact]
+    public void RecruitsAppearOnAnOwnedMineWhenTheCapitalIsBusier()
+    {
+        var s = NewMatch(3);
+        int mine = MineFarFrom(s);
+        s.TileOwner[mine] = 0;
+        s.Players[0].Supply = Rules.StackCostMilli;
+        var spawn = Simulation.Step(s, None).OfType<StackSpawned>().Single();
+        Assert.Equal(mine, spawn.Tile);          // capital already holds a stack, the mine holds none
+    }
+
+    [Fact]
+    public void RecruitsNeverAppearOnOrdinaryTiles()
+    {
+        var s = NewMatch(3);
+        s.TileOwner[s.Players[0].Capital] = 1;   // capital lost
+        s.Stacks.RemoveAll(x => x.Owner == 0);
+        int plain = Enumerable.Range(0, s.Map.TileCount).First(t => !s.Map.Deposit[t] && s.TileOwner[t] == -1);
+        s.TileOwner[plain] = 0;
+        s.Players[0].Supply = Rules.StackCostMilli * 3;
+        var events = Simulation.Step(s, None);
+        Assert.DoesNotContain(events, e => e is StackSpawned { Owner: 0 });
+        Assert.True(s.Players[0].Supply >= Rules.StackCostMilli * 3);   // nothing was spent
+    }
+
+    [Fact]
+    public void NoRecruitsOnATileWithAnEnemyStack()
+    {
+        var s = NewMatch(3);
+        s.AddStack(1, s.Players[0].Capital, 3);
+        s.Players[0].Supply = Rules.StackCostMilli;
+        Assert.DoesNotContain(Simulation.Step(s, None), e => e is StackSpawned { Owner: 0 });
+    }
 }

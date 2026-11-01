@@ -348,6 +348,27 @@ public static class Simulation
 
     // ---- economy --------------------------------------------------------------------------
 
+    /// <summary>
+    /// New stacks appear only at your capital or on a deposit ("mine") you own, and never on a tile
+    /// an enemy stack is standing on. Of the open sites the one holding the fewest of your stacks
+    /// wins (capital first on ties), so recruits spread out. -1 when no site is open.
+    /// </summary>
+    private static int SpawnTile(GameState s, Player p)
+    {
+        int best = -1;
+        int bestCount = int.MaxValue;
+        for (int t = -1; t < s.Map.TileCount; t++)
+        {
+            int tile = t == -1 ? p.Capital : t;
+            if (t != -1 && (!s.Map.Deposit[t] || tile == p.Capital)) continue;
+            if (s.TileOwner[tile] != p.Id) continue;
+            if (s.Stacks.Any(x => x.Owner != p.Id && x.Tile == tile)) continue;
+            int count = s.Stacks.Count(x => x.Owner == p.Id && x.Tile == tile);
+            if (count < bestCount) { bestCount = count; best = tile; }
+        }
+        return best;
+    }
+
     private static void Economy(GameState s, List<SimEvent> events)
     {
         foreach (var p in s.Majors)
@@ -360,7 +381,7 @@ public static class Simulation
 
             long cost = s.Stat(p.Id, Rules.StatStackCost, Rules.StackCostMilli);
             if (p.Supply < cost || s.Stacks.Count(x => x.Owner == p.Id) >= p.MaxStacks) continue;
-            int at = s.TileOwner[p.Capital] == p.Id ? p.Capital : Array.IndexOf(s.TileOwner, p.Id);
+            int at = SpawnTile(s, p);
             if (at < 0) continue;
             p.Supply -= cost;
             var ns = s.AddStack(p.Id, at, Rules.NewStackStrength);
