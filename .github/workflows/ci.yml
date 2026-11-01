@@ -42,11 +42,6 @@ jobs:
           mkdir -p build/windows
           godot --headless --path godot --export-release "Windows Desktop" ../build/windows/Planetfall.exe
           test -f build/windows/Planetfall.exe
-      - name: Export macOS (universal, unsigned)
-        run: |
-          mkdir -p build/macos
-          godot --headless --path godot --export-release "macOS" ../build/macos/Planetfall.zip
-          test -f build/macos/Planetfall.zip
       - uses: actions/upload-artifact@v4
         with:
           name: builds

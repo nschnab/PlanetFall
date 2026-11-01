@@ -18,4 +18,4 @@ dotnet test sim.tests
 godot --path godot          # or open godot/project.godot in the editor
 ```
 
-macOS builds are unsigned until M9; open with right-click → Open.
+macOS is deferred (preset exists in `godot/export_presets.cfg`, not built in CI yet).
