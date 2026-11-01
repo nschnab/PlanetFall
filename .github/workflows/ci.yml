@@ -31,11 +31,13 @@ jobs:
         run: |
           mkdir -p ~/.local/share/godot/export_templates
           mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono ~/.local/share/godot/export_templates/ || true
+      - name: Build C# assembly
+        run: dotnet build godot/Planetfall.csproj --configuration Debug
       - name: Import project (a headless import can crash on exit; continue regardless)
         run: godot --headless --path godot --import || true
       - name: Headless smoke test
         run: |
-          timeout 60 godot --headless --path godot --quit-after 3 | tee smoke.txt
+          timeout 60 godot --headless --path godot --quit-after 3 2>&1 | tee smoke.txt
           grep -q "Planetfall sim " smoke.txt
       - name: Export Windows
         run: |
