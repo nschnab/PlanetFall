@@ -6,16 +6,13 @@ const H := 720.0
 const MARGIN := 20.0
 const COLS := 11
 const ROWS := 8
-const SPEED := 70.0        # px/s
-const CAPTURE_TIME := 3.0
+const MOVE_DELAY := 1.5    # seconds an order shows its arrow before the hop
 const WIN_FRAC := 0.75
 
 var seeds: Array[Vector2] = []
 var polys: Array[PackedVector2Array] = []
 var nbrs: Array = []
 var owner_of: PackedInt32Array = []
-var cap_side: PackedInt32Array = []   # who is currently capturing
-var cap_prog: PackedFloat32Array = []
 var stacks: Array = []                # dictionaries
 var t := 0.0
 var paused := false
@@ -66,10 +63,6 @@ func start() -> void:
 	var n := seeds.size()
 	owner_of = PackedInt32Array()
 	owner_of.resize(n)
-	cap_side = PackedInt32Array()
-	cap_side.resize(n)
-	cap_prog = PackedFloat32Array()
-	cap_prog.resize(n)
 	var pt := nearest(Vector2(150, 200))
 	var et := nearest(Vector2(W - 150, H - 120))
 	owner_of[pt] = 1
@@ -81,7 +74,7 @@ func start() -> void:
 	paused = false
 
 func make_stack(side: int, tile: int, strength: int) -> Dictionary:
-	return {"side": side, "tile": tile, "from": tile, "to": tile, "k": 1.0, "path": [], "str": strength, "hp": float(strength), "wait": 0.0}
+	return {"side": side, "tile": tile, "target": -1, "timer": 0.0, "path": [], "str": strength, "hp": float(strength), "wait": 1.0}
 
 func clip(poly: PackedVector2Array, a: Vector2, b: Vector2) -> PackedVector2Array:
 	var m := (a + b) * 0.5
@@ -151,9 +144,12 @@ func _unhandled_input(e: InputEvent) -> void:
 		var tl := tile_at(e.position)
 		var s: Dictionary = stacks[0]
 		if tl >= 0 and s.side == 1:
-			# re-path from the tile we are heading to, so a mid-edge click doesn't teleport
-			var origin: int = s.to if s.k < 1.0 else s.tile
-			s.path = find_path(origin, tl)
+			s.path = find_path(s.tile, tl)
+			# keep a pending hop only if the new route still starts with it
+			if s.target != -1 and (s.path.is_empty() or s.path[0] != s.target):
+				s.target = -1
+			elif s.target != -1:
+				s.path.pop_front()
 	elif e is InputEventMouseMotion:
 		hover = tile_at(e.position)
 	elif e is InputEventKey and e.pressed:
@@ -173,12 +169,12 @@ func step(dt: float) -> void:
 		advance(s, dt)
 	# enemy random walk
 	for s in stacks:
-		if s.side == 2 and s.k >= 1.0 and s.path.is_empty():
+		if s.side == 2 and s.target == -1 and s.path.is_empty():
 			s.wait -= dt
 			if s.wait <= 0.0:
 				var nb: Array = nbrs[s.tile]
 				s.path = [nb[rng.randi() % nb.size()]]
-				s.wait = rng.randf_range(0.0, 2.5)  # sometimes lingers
+				s.wait = rng.randf_range(0.0, 2.0)  # sometimes lingers
 	# battles: same tile, opposite sides
 	for i in range(stacks.size()):
 		for j in range(i + 1, stacks.size()):
@@ -201,34 +197,15 @@ func step(dt: float) -> void:
 		respawn_in -= dt
 		if respawn_in <= 0.0:
 			stacks.append(make_stack(2, rng.randi() % seeds.size(), 8))
-	# capture
+	# instant capture: alone on a tile you do not own
 	for s in stacks:
 		var tl: int = s.tile
 		var enemy_here := false
 		for o in stacks:
 			if o.side != s.side and o.tile == tl:
 				enemy_here = true
-		if enemy_here or owner_of[tl] == s.side:
-			continue
-		if cap_side[tl] != s.side:
-			cap_prog[tl] -= dt / CAPTURE_TIME
-			if cap_prog[tl] <= 0.0:
-				cap_prog[tl] = 0.0
-				cap_side[tl] = s.side
-		else:
-			cap_prog[tl] += dt / CAPTURE_TIME
-			if cap_prog[tl] >= 1.0:
-				owner_of[tl] = s.side
-				cap_prog[tl] = 0.0
-	# progress decays on unattended tiles
-	for i in seeds.size():
-		if cap_prog[i] > 0.0:
-			var held := false
-			for s in stacks:
-				if s.tile == i and s.side == cap_side[i]:
-					held = true
-			if not held:
-				cap_prog[i] = maxf(0.0, cap_prog[i] - dt / CAPTURE_TIME * 0.5)
+		if not enemy_here:
+			owner_of[tl] = s.side
 	var mine := 0
 	for o in owner_of:
 		if o == 1:
@@ -237,27 +214,28 @@ func step(dt: float) -> void:
 		state = 1
 
 func advance(s: Dictionary, dt: float) -> void:
-	var left := dt
-	while left > 0.0:
-		if s.k >= 1.0:
-			if s.path.is_empty():
-				return
-			s.from = s.tile
-			s.to = s.path.pop_front()
-			s.k = 0.0
-		var d := centroid(s.from).distance_to(centroid(s.to))
-		var step_k := left * SPEED / maxf(d, 1.0)
-		if s.k + step_k >= 1.0:
-			left -= (1.0 - s.k) * d / SPEED
-			s.k = 1.0
-			s.tile = s.to
-		else:
-			s.k += step_k
-			left = 0.0
-			s.tile = s.to if s.k >= 0.5 else s.from
+	if s.target == -1:
+		if s.path.is_empty():
+			return
+		s.target = s.path.pop_front()
+		s.timer = 0.0
+	s.timer += dt
+	if s.timer >= MOVE_DELAY:
+		s.tile = s.target
+		s.target = -1
 
 func stack_pos(s: Dictionary) -> Vector2:
-	return centroid(s.from).lerp(centroid(s.to), s.k)
+	return centroid(s.tile)
+
+func draw_arrow(from: Vector2, to: Vector2, prog: float, col: Color) -> void:
+	var dir := (to - from).normalized()
+	var perp := Vector2(-dir.y, dir.x)
+	var a := from + dir * 20.0
+	var b := to - dir * 20.0
+	draw_line(a, b, Color(col, 0.35), 6.0)
+	var tip := a.lerp(b, prog)
+	draw_line(a, tip, col, 6.0)
+	draw_colored_polygon(PackedVector2Array([b + dir * 14.0, b - dir * 4.0 + perp * 12.0, b - dir * 4.0 - perp * 12.0]), Color(col, 0.35 + 0.65 * prog))
 
 func side_color(side: int) -> Color:
 	match side:
@@ -276,10 +254,6 @@ func _draw() -> void:
 	for i in polys.size():
 		var base := side_color(owner_of[i])
 		draw_colored_polygon(polys[i], base.darkened(0.45) if owner_of[i] != 0 else base)
-		if cap_prog[i] > 0.0:
-			var c := centroid(i)
-			var f := sqrt(cap_prog[i])
-			draw_colored_polygon(shrink(polys[i], c, f), side_color(cap_side[i]).darkened(0.1))
 		var outline := PackedVector2Array(polys[i])
 		outline.append(polys[i][0])
 		draw_polyline(outline, Color(0, 0, 0, 0.8), 2.0)
@@ -290,10 +264,13 @@ func _draw() -> void:
 	# player path
 	if not stacks.is_empty() and stacks[0].side == 1:
 		var p0: Dictionary = stacks[0]
-		var prev := stack_pos(p0)
+		var prev := centroid(p0.target) if p0.target != -1 else stack_pos(p0)
 		for tl in p0.path:
 			draw_line(prev, centroid(tl), Color(1, 1, 1, 0.5), 2.0)
 			prev = centroid(tl)
+	for s in stacks:
+		if s.target != -1:
+			draw_arrow(centroid(s.tile), centroid(s.target), s.timer / MOVE_DELAY, Color(1, 1, 1) if s.side == 1 else Color(1, 0.7, 0.2))
 	var font := ThemeDB.fallback_font
 	for s in stacks:
 		var pos := stack_pos(s)
