@@ -1,0 +1,26 @@
+# Godot 4
+.godot/
+/android/
+*.translation
+export_presets.cfg.bak
+
+# Exports / builds
+/build/
+/exports/
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Tool output
+/tools/**/out/
