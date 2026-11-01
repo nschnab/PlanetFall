@@ -16,6 +16,9 @@ public sealed class Player
 
     /// <summary>Minor powers hold ground and never expand, buy stacks, or count for victory.</summary>
     public bool Minor { get; init; }
+
+    /// <summary>Most stacks this player may field at once; recruiting pauses at the cap.</summary>
+    public int MaxStacks { get; set; } = int.MaxValue;
 }
 
 public sealed class GameState

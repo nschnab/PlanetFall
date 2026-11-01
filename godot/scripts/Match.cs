@@ -30,6 +30,9 @@ public partial class Match : Node2D
     private static readonly Leader Commander =
         Leader.Parse("""{ "id": "commander", "name": "Field Commander" }""");
 
+    /// <summary>Difficulty knob: most stacks the rival may field at once.</summary>
+    private const int RivalMaxStacks = 4;
+
     private GameState _s = null!;
     private RivalAi _ai = null!;
     private readonly List<Command> _pending = new();
@@ -53,6 +56,7 @@ public partial class Match : Node2D
         _seed = seed;
         var map = MapGenerator.Generate(seed);
         _s = GameState.NewWithMinor(map, GameState.PickMinorTile(map), Rules.MinorStrength, Commander, Commander);
+        _s.Players[1].MaxStacks = RivalMaxStacks;
         _ai = new RivalAi(1);
         _pending.Clear();
         _selected = -1;

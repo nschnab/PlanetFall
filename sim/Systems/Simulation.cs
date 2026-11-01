@@ -231,7 +231,7 @@ public static class Simulation
             p.Supply += income;
 
             long cost = s.Stat(p.Id, Rules.StatStackCost, Rules.StackCostMilli);
-            if (p.Supply < cost) continue;
+            if (p.Supply < cost || s.Stacks.Count(x => x.Owner == p.Id) >= p.MaxStacks) continue;
             int at = s.TileOwner[p.Capital] == p.Id ? p.Capital : Array.IndexOf(s.TileOwner, p.Id);
             if (at < 0) continue;
             p.Supply -= cost;

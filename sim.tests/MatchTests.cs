@@ -144,4 +144,19 @@ public class MatchTests
         var hashes = Enumerable.Range(1, 20).Select(i => MapGenerator.Generate((ulong)i).Hash()).ToList();
         Assert.Equal(20, hashes.Distinct().Count());
     }
+
+    [Fact]
+    public void StackCapLimitsHowManyStacksAPlayerFields()
+    {
+        var s = NewMatch(3);
+        s.Players[0].MaxStacks = 2;
+        s.Players[0].Supply = Rules.StackCostMilli * 10;
+        int most = 0;
+        for (int i = 0; i < 100; i++)
+        {
+            Simulation.Step(s, None);
+            most = Math.Max(most, s.Stacks.Count(x => x.Owner == 0));
+        }
+        Assert.Equal(2, most);
+    }
 }
