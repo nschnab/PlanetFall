@@ -159,4 +159,154 @@ public class MatchTests
         }
         Assert.Equal(2, most);
     }
+
+    // ---- encirclement, entrenchment, attackers, flanking ------------------------------------
+
+    private static int FarFromBoth(GameState s)
+    {
+        for (int t = 0; t < s.Map.TileCount; t++)
+        {
+            if (s.Players[1].Capital == t || s.Players[0].Capital == t || s.Players[2].Capital == t) continue;
+            if (s.Map.Neighbors[t].Any(n => n == s.Players[1].Capital || n == s.Players[0].Capital || n == s.Players[2].Capital)) continue;
+            if (s.Players.Any(p => s.Map.Neighbors[t].Any(n => s.Map.Neighbors[n].Contains(p.Capital)))) continue;
+            return t;
+        }
+        throw new InvalidOperationException();
+    }
+
+    private static GameState Surrounded(out int pocket)
+    {
+        var s = NewMatch(3);
+        pocket = FarFromBoth(s);
+        s.Stacks.Clear();
+        for (int t = 0; t < s.Map.TileCount; t++)
+            if (t != pocket && t != s.Players[1].Capital && t != s.Players[2].Capital) s.TileOwner[t] = 0;
+        s.TileOwner[pocket] = -1;
+        s.AddStack(1, s.Players[1].Capital, 10);   // keeps player 1 alive
+        return s;
+    }
+
+    [Fact]
+    public void EncircledTilesConnectedToTheCapitalAreCaptured()
+    {
+        var s = Surrounded(out int pocket);
+        Run(s, 1);
+        Assert.Equal(0, s.TileOwner[pocket]);
+        Assert.NotEqual(0, s.TileOwner[s.Players[1].Capital]);   // a capital is never swallowed
+    }
+
+    [Fact]
+    public void EncirclementDoesNothingWithAnEnemyInside()
+    {
+        var s = Surrounded(out int pocket);
+        s.AddStack(1, pocket, 5);
+        Run(s, 1);
+        Assert.NotEqual(0, s.TileOwner[pocket]);
+    }
+
+    [Fact]
+    public void EncirclementNeedsTheRingConnectedToTheCapital()
+    {
+        var s = NewMatch(3);
+        s.Stacks.Clear();
+        s.AddStack(1, s.Players[1].Capital, 10);
+        int pocket = FarFromBoth(s);
+        foreach (int n in s.Map.Neighbors[pocket]) s.TileOwner[n] = 0;   // ring only, cut off from capital
+        Run(s, 1);
+        Assert.Equal(-1, s.TileOwner[pocket]);
+    }
+
+    [Fact]
+    public void StackEntrenchesTenPercentEveryTenSecondsUpToFifty()
+    {
+        var s = NewMatch(3);
+        var st = s.Stacks.First(x => x.Owner == 0);
+        Run(s, 99);
+        Assert.Equal(0, st.Entrench);
+        Run(s, 1);
+        Assert.Equal(100, st.Entrench);
+        Run(s, 100);
+        Assert.Equal(200, st.Entrench);
+        Run(s, 600);
+        Assert.Equal(500, st.Entrench);
+    }
+
+    [Fact]
+    public void MovingRemovesEntrenchment()
+    {
+        var s = NewMatch(3);
+        var st = s.Stacks.First(x => x.Owner == 0);
+        Run(s, 250);
+        Assert.Equal(200, st.Entrench);
+        Simulation.Step(s, new Command[] { new MoveCommand(0, st.Id, s.Map.Neighbors[st.Tile][0]) });
+        Assert.Equal(0, st.Entrench);
+        Assert.Equal(0, st.StillTicks);
+    }
+
+    [Fact]
+    public void BeingAttackedPausesTheEntrenchTimerButKeepsTheBonus()
+    {
+        var s = NewMatch(3);
+        var st = s.Stacks.First(x => x.Owner == 0);
+        Run(s, 150);
+        Assert.Equal(100, st.Entrench);
+        int still = st.StillTicks;
+        s.AddStack(1, st.Tile, 60);
+        Run(s, 30);
+        Assert.Equal(still, st.StillTicks);
+        Assert.Equal(100, st.Entrench);
+    }
+
+    private static (long attackerLoss, long defenderLoss) OneTickClash(int defenderEntrench)
+    {
+        var s = NewMatch(3);
+        s.Stacks.Clear();
+        int a = s.Players[0].Capital;
+        int b = s.Map.Neighbors[a][0];
+        var atk = s.AddStack(0, a, 10);
+        var def = s.AddStack(1, b, 10);
+        def.Entrench = defenderEntrench;
+        long ah = atk.Hp, dh = def.Hp;
+        Simulation.Step(s, new Command[] { new MoveCommand(0, atk.Id, b) });
+        return (ah - atk.Hp, dh - def.Hp);
+    }
+
+    [Fact]
+    public void AttackersLoseSlightlyMoreThanDefenders()
+    {
+        var (atk, def) = OneTickClash(0);
+        Assert.True(atk > def);
+        Assert.True(atk * 100 < def * 125);     // "slightly": under 25% more
+    }
+
+    [Fact]
+    public void EntrenchmentCutsDamageTaken()
+    {
+        var (_, plain) = OneTickClash(0);
+        var (_, dug) = OneTickClash(500);
+        Assert.True(dug * 3 <= plain * 2 + 3);  // +50% defence -> two thirds
+    }
+
+    [Fact]
+    public void BeingAttackedFromTwoFrontsHurtsMoreThanTwiceAsMuch()
+    {
+        long Loss(int fronts)
+        {
+            var s = NewMatch(3);
+            s.Stacks.Clear();
+            int target = s.Map.TileCount / 2;
+            var victim = s.AddStack(1, target, 20);
+            long before = victim.Hp;
+            foreach (int n in s.Map.Neighbors[target].Take(fronts))
+            {
+                var a = s.AddStack(0, n, 10);
+                a.Target = target;
+            }
+            Simulation.Step(s, None);
+            return before - victim.Hp;
+        }
+        long one = Loss(1), two = Loss(2), three = Loss(3);
+        Assert.True(two > one * 2);
+        Assert.True(three > two);
+    }
 }

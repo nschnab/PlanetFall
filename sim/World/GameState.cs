@@ -151,7 +151,7 @@ public sealed class GameState
         foreach (var s in Stacks)
         {
             Add(s.Id); Add(s.Owner); Add(s.Tile); Add(s.Target); Add(s.Timer);
-            Add(s.Hp); Add(s.MaxHp); Add(s.Retreating ? 1 : 0);
+            Add(s.Hp); Add(s.MaxHp); Add(s.Retreating ? 1 : 0); Add(s.StillTicks); Add(s.Entrench);
             Add(s.Path.Count);
             foreach (int t in s.Path) Add(t);
         }

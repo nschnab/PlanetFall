@@ -255,6 +255,8 @@ public partial class Match : Node2D
                     float frac = Mathf.Clamp(st.Timer / (float)need, 0f, 1f);
                     DrawArc(pos, r + 5, -Mathf.Pi / 2, -Mathf.Pi / 2 + Mathf.Tau * frac, 24, Colors.White, 2.5f);
                 }
+                if (st.Entrench > 0)
+                    DrawString(_font, pos + new Vector2(-14, r + 14), $"+{st.Entrench / 10}% def", HorizontalAlignment.Left, -1, 11, new Color(0.7f, 1f, 0.7f));
                 var txt = st.EffectiveStrength.ToString();
                 var sz = _font.GetStringSize(txt, HorizontalAlignment.Left, -1, 14);
                 DrawString(_font, pos + new Vector2(-sz.X / 2, 5), txt, HorizontalAlignment.Left, -1, 14, Colors.White);

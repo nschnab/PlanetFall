@@ -17,8 +17,10 @@ public static class Simulation
         int surrendered = ApplyCommands(s, commands);
         Movement(s, events);
         Combat(s, events);
+        Entrench(s);
         Merge(s, events);
         Capture(s, events);
+        Encircle(s, events);
         Economy(s, events);
         Victory(s, events, surrendered);
         s.Tick++;
@@ -141,14 +143,24 @@ public static class Simulation
     private static void Combat(GameState s, List<SimEvent> events)
     {
         var damage = new long[s.Stacks.Count];
-        for (int i = 0; i < s.Stacks.Count; i++)
-        for (int j = i + 1; j < s.Stacks.Count; j++)
+        for (int v = 0; v < s.Stacks.Count; v++)
         {
-            var a = s.Stacks[i];
-            var b = s.Stacks[j];
-            if (!Fighting(a, b)) continue;
-            damage[i] += (long)b.EffectiveStrength * Rules.DamagePerStrPerTickMilli;
-            damage[j] += (long)a.EffectiveStrength * Rules.DamagePerStrPerTickMilli;
+            var victim = s.Stacks[v];
+            long raw = 0;
+            var fronts = new HashSet<int>();
+            foreach (var foe in s.Stacks)
+            {
+                if (!Fighting(victim, foe)) continue;
+                raw += (long)foe.EffectiveStrength * Rules.DamagePerStrPerTickMilli;
+                fronts.Add(foe.Tile);
+            }
+            if (raw == 0) continue;
+
+            long flank = 1000 + (long)Rules.FlankBonusPermille * (Math.Min(fronts.Count, Rules.MaxFronts) - 1);
+            long attacker = IsAttackerAgainstAny(s, victim) ? Rules.AttackerPenaltyPermille : 1000;
+            long dug = 1000 + victim.Entrench;
+            long denom = 1000L * 1000 * dug;
+            damage[v] = (raw * flank * attacker * 1000 + denom / 2) / denom;
         }
         for (int i = 0; i < s.Stacks.Count; i++) s.Stacks[i].Hp -= damage[i];
 
@@ -172,6 +184,22 @@ public static class Simulation
         }
     }
 
+    /// <summary>
+    /// Attackers are the side that began a hop into the other's tile; where both share a tile the
+    /// side that does not own it attacks. Two stacks hopping at each other are both attackers
+    /// (so neither is penalised relative to the other).
+    /// </summary>
+    private static bool IsAttackerAgainstAny(GameState s, Stack v)
+    {
+        foreach (var o in s.Stacks)
+        {
+            if (!Fighting(v, o)) continue;
+            if (v.Target == o.Tile && o.Target != v.Tile) return true;
+            if (v.Tile == o.Tile && s.TileOwner[v.Tile] != v.Owner && s.TileOwner[v.Tile] == o.Owner) return true;
+        }
+        return false;
+    }
+
     private static int RetreatTile(GameState s, Stack st)
     {
         foreach (int n in s.Map.Neighbors[st.Tile])
@@ -181,6 +209,29 @@ public static class Simulation
             return n;
         }
         return -1;
+    }
+
+    // ---- entrenchment ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Standing still for 10 s starts digging in: +10% defence per further 10 s, up to +50%. Moving
+    /// removes it. Being attacked freezes the timer but keeps what has been dug.
+    /// </summary>
+    private static void Entrench(GameState s)
+    {
+        foreach (var st in s.Stacks)
+        {
+            if (st.Target != -1 || st.Path.Count > 0)
+            {
+                st.StillTicks = 0;
+                st.Entrench = 0;
+                continue;
+            }
+            if (Engaged(s, st)) continue;
+            st.StillTicks++;
+            if (st.StillTicks % Rules.EntrenchStartTicks == 0 && st.Entrench < Rules.EntrenchMaxPermille)
+                st.Entrench = Math.Min(Rules.EntrenchMaxPermille, st.Entrench + Rules.EntrenchStepPermille);
+        }
     }
 
     // ---- merging --------------------------------------------------------------------------
@@ -197,6 +248,8 @@ public static class Simulation
                 if (!b.Idle || b.Owner != a.Owner || b.Tile != a.Tile) continue;
                 a.Hp += b.Hp;
                 a.MaxHp += b.MaxHp;
+                a.Entrench = Math.Min(a.Entrench, b.Entrench);
+                a.StillTicks = Math.Min(a.StillTicks, b.StillTicks);
                 s.Stacks.RemoveAt(j);
                 events.Add(new StacksMerged(a.Id, b.Id));
                 j--;
@@ -216,6 +269,81 @@ public static class Simulation
             s.TileOwner[st.Tile] = st.Owner;
             events.Add(new TileCaptured(st.Tile, st.Owner, prev));
         }
+    }
+
+    // ---- encirclement ---------------------------------------------------------------------
+
+    /// <summary>
+    /// A pocket of tiles (neutral or foreign) whose every border tile is yours, and whose border
+    /// is connected to your capital, falls to you automatically. Not if an enemy stack is inside
+    /// or the pocket holds another major's capital.
+    /// </summary>
+    private static void Encircle(GameState s, List<SimEvent> events)
+    {
+        foreach (var p in s.Majors)
+        {
+            if (s.TileOwner[p.Capital] != p.Id) continue;
+            var linked = ConnectedToCapital(s, p);
+            var seen = new bool[s.Map.TileCount];
+
+            for (int start = 0; start < s.Map.TileCount; start++)
+            {
+                if (seen[start] || s.TileOwner[start] == p.Id) continue;
+
+                var pocket = new List<int>();
+                var q = new Queue<int>();
+                q.Enqueue(start);
+                seen[start] = true;
+                bool enclosed = true;
+                while (q.Count > 0)
+                {
+                    int c = q.Dequeue();
+                    pocket.Add(c);
+                    foreach (int n in s.Map.Neighbors[c])
+                    {
+                        if (s.TileOwner[n] == p.Id)
+                        {
+                            if (!linked[n]) enclosed = false;
+                        }
+                        else if (!seen[n])
+                        {
+                            seen[n] = true;
+                            q.Enqueue(n);
+                        }
+                    }
+                }
+                if (!enclosed) continue;
+                if (pocket.Any(t => s.Players.Any(o => o.Id != p.Id && o.Capital == t && !o.Minor))) continue;
+                if (s.Stacks.Any(x => x.Owner != p.Id && pocket.Contains(x.Tile))) continue;
+
+                pocket.Sort();
+                foreach (int t in pocket)
+                {
+                    int prev = s.TileOwner[t];
+                    s.TileOwner[t] = p.Id;
+                    events.Add(new TileCaptured(t, p.Id, prev));
+                }
+            }
+        }
+    }
+
+    private static bool[] ConnectedToCapital(GameState s, Player p)
+    {
+        var linked = new bool[s.Map.TileCount];
+        var q = new Queue<int>();
+        linked[p.Capital] = true;
+        q.Enqueue(p.Capital);
+        while (q.Count > 0)
+        {
+            int c = q.Dequeue();
+            foreach (int n in s.Map.Neighbors[c])
+            {
+                if (linked[n] || s.TileOwner[n] != p.Id) continue;
+                linked[n] = true;
+                q.Enqueue(n);
+            }
+        }
+        return linked;
     }
 
     // ---- economy --------------------------------------------------------------------------

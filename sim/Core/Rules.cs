@@ -17,6 +17,13 @@ public static class Rules
     public const int CapitulationTicks = 600;       // enemy holds your capital this long (60 s) and you capitulate
     public const int MinorStrength = 8;
 
+    public const int AttackerPenaltyPermille = 1150; // attackers take 15% more damage than defenders
+    public const int FlankBonusPermille = 250;       // +25% damage per extra front a stack is attacked from
+    public const int MaxFronts = 4;
+    public const int EntrenchStartTicks = 100;       // 10 s standing still, then every 10 s...
+    public const int EntrenchStepPermille = 100;     // ...+10% defence...
+    public const int EntrenchMaxPermille = 500;      // ...up to +50%
+
     public const string StatMoveDelay = "move.delay";
     public const string StatMoveSpeed = "move.speed";
     public const string StatYield = "yield.alloy";
