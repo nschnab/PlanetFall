@@ -187,6 +187,13 @@ public partial class Match : Node2D
         {
             int o = _s.TileOwner[t];
             var fill = o == -1 ? Neutral : OwnerColor[o].Darkened(0.35f);
+            switch (_s.Map.Terrain[t])
+            {
+                case Terrain.Water: fill = new Color(0.07f, 0.16f, 0.30f); break;
+                case Terrain.Mountains: fill = new Color(0.30f, 0.30f, 0.32f); break;
+                case Terrain.Forest when o == -1: fill = fill.Lerp(new Color(0.10f, 0.28f, 0.14f), 0.5f); break;
+                case Terrain.Highlands when o == -1: fill = fill.Lerp(new Color(0.40f, 0.34f, 0.22f), 0.5f); break;
+            }
             if (t == _hover) fill = fill.Lightened(0.12f);
             var pts = Poly(t);
             DrawColoredPolygon(pts, fill);

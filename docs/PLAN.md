@@ -390,6 +390,7 @@ Profile release builds; CI fails if the mean sim tick exceeds budget.
 - **Combat modifiers:** attackers take +15% damage; +25% damage per extra distinct attacking tile (max 4 fronts); entrenchment gives defenders +10% per 10 s stood still after the first 10 s, up to +50%, lost on moving, frozen while attacked.
 - **Spawning:** new stacks appear only on your capital or an owned deposit ("mine"), never on a tile with an enemy stack; the site with the fewest friendly stacks is chosen. No open site means no purchase and supply keeps accumulating.
 - **Rival cap:** `Player.MaxStacks` limits the AI (client sets 4) as a difficulty knob.
+- **M3a terrain (started early at the user's request, before the slice was playtested):** rank-based fBm elevation and moisture give Plains, Forest, Highlands, Mountains and Water. Mountains and Water are ground-impassable and have no adjacency, so pathing, AI and encirclement need no special cases. Spawns are forced open, cut-off land becomes lake, and validation adds a 72-92% passable band. Biomes are cosmetic apart from passability until M4. `SplitMix64.Derive` had a collision bug (nearby seeds shared sub-seeds), now fixed and tested.
 - Note: the M2 done-test "+50% capture" means "+50% move speed" (capture is instant).
 
 Critical path: M0 → M1 → M2. Nothing after M2 starts until the slice is judged fun.

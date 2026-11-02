@@ -15,10 +15,11 @@ public static class SplitMix64
     public static ulong Derive(ulong matchSeed, string stream)
     {
         ulong s = matchSeed;
+        s = Next(ref s);   // Next only adds a constant to its state, so feed the hashed output back in: raw XORs made (seed 2, "x1") collide with (seed 3, "x0")
         foreach (char c in stream)
         {
             s ^= c;
-            Next(ref s);
+            s = Next(ref s);
         }
         return Next(ref s);
     }

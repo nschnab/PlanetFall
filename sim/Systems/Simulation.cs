@@ -288,7 +288,7 @@ public static class Simulation
 
             for (int start = 0; start < s.Map.TileCount; start++)
             {
-                if (seen[start] || s.TileOwner[start] == p.Id) continue;
+                if (seen[start] || s.TileOwner[start] == p.Id || !s.Map.Passable(start)) continue;
 
                 var pocket = new List<int>();
                 var q = new Queue<int>();

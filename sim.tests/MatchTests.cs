@@ -166,7 +166,7 @@ public class MatchTests
     {
         for (int t = 0; t < s.Map.TileCount; t++)
         {
-            if (s.Players[1].Capital == t || s.Players[0].Capital == t || s.Players[2].Capital == t) continue;
+            if (!s.Map.Passable(t) || s.Players[1].Capital == t || s.Players[0].Capital == t || s.Players[2].Capital == t) continue;
             if (s.Map.Neighbors[t].Any(n => n == s.Players[1].Capital || n == s.Players[0].Capital || n == s.Players[2].Capital)) continue;
             if (s.Players.Any(p => s.Map.Neighbors[t].Any(n => s.Map.Neighbors[n].Contains(p.Capital)))) continue;
             return t;
@@ -180,7 +180,7 @@ public class MatchTests
         pocket = FarFromBoth(s);
         s.Stacks.Clear();
         for (int t = 0; t < s.Map.TileCount; t++)
-            if (t != pocket && t != s.Players[1].Capital && t != s.Players[2].Capital) s.TileOwner[t] = 0;
+            if (s.Map.Passable(t) && t != pocket && t != s.Players[1].Capital && t != s.Players[2].Capital) s.TileOwner[t] = 0;
         s.TileOwner[pocket] = -1;
         s.AddStack(1, s.Players[1].Capital, 10);   // keeps player 1 alive
         return s;
@@ -294,7 +294,7 @@ public class MatchTests
         {
             var s = NewMatch(3);
             s.Stacks.Clear();
-            int target = s.Map.TileCount / 2;
+            int target = Enumerable.Range(0, s.Map.TileCount).First(t => s.Map.Neighbors[t].Length >= 3);
             var victim = s.AddStack(1, target, 20);
             long before = victim.Hp;
             foreach (int n in s.Map.Neighbors[target].Take(fronts))

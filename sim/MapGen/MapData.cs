@@ -1,12 +1,14 @@
 namespace Planetfall.Sim.MapGen;
 
+public enum Terrain : byte { Plains, Forest, Highlands, Mountains, Water }
+
 /// <summary>
 /// Plain generated map. Coordinates are map units x16 (integers) so a saved map and a
 /// regenerated one compare byte-for-byte. Generation may use doubles; nothing downstream does.
 /// </summary>
 public sealed record MapData
 {
-    public const int GeneratorVersion = 1;
+    public const int GeneratorVersion = 2;
     public const int Scale = 16;
 
     public required ulong Seed { get; init; }
@@ -24,6 +26,14 @@ public sealed record MapData
     public required int[][] Neighbors { get; init; }
 
     public required bool[] Deposit { get; init; }
+
+    /// <summary>Per tile biome. Mountains and Water are ground-impassable: they have no neighbours.</summary>
+    public required Terrain[] Terrain { get; init; }
+
+    public bool Passable(int tile) => Terrain[tile] != MapGen.Terrain.Mountains && Terrain[tile] != MapGen.Terrain.Water;
+
+    /// <summary>Fraction of tiles ground units can enter.</summary>
+    public double PassableFraction => (double)Enumerable.Range(0, TileCount).Count(Passable) / TileCount;
 
     /// <summary>One capital tile per major player slot.</summary>
     public required int[] Spawns { get; init; }
@@ -49,7 +59,7 @@ public sealed record MapData
         Add((long)Seed); Add(Attempt); Add(UsedFallback ? 1 : 0); Add(Width); Add(Height);
         for (int t = 0; t < TileCount; t++)
         {
-            Add(CentroidX[t]); Add(CentroidY[t]); Add(Deposit[t] ? 1 : 0);
+            Add(CentroidX[t]); Add(CentroidY[t]); Add(Deposit[t] ? 1 : 0); Add((long)Terrain[t]);
             Add(Polygon[t].Length);
             foreach (int v in Polygon[t]) Add(v);
             Add(Neighbors[t].Length);

@@ -100,7 +100,7 @@ public sealed class GameState
         long bestScore = long.MaxValue;
         for (int t = 0; t < map.TileCount; t++)
         {
-            if (near.Contains(t)) continue;
+            if (near.Contains(t) || !map.Passable(t)) continue;
             long dx = map.CentroidX[t] - cx, dy = map.CentroidY[t] - cy;
             long score = dx * dx + dy * dy - (map.Deposit[t] ? 1L << 40 : 0);
             if (score < bestScore) { bestScore = score; best = t; }

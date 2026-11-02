@@ -16,6 +16,11 @@ public static class MapGenerator
     public const int FairnessHops = 4;
     public const int MinSpawnHops = 8;
     public const int DepositValue = 5;
+    public const double WaterShare = 0.08;
+    public const double MountainShare = 0.09;
+    public const double HighlandShare = 0.15;
+    public const double MinPassable = 0.72;
+    public const double MaxPassable = 0.92;
 
     public static MapData Generate(ulong seed, int cols = 20, int rows = 10)
     {
@@ -25,7 +30,7 @@ public static class MapGenerator
             ulong sub = SplitMix64.Derive(seed, "map:" + attempt);
             MapData map = Build(seed, attempt, sub, cols, rows, usedFallback: false);
             last = map;
-            if (map.SpawnValueRatio <= MaxSpawnValueRatio && SpawnsFarEnough(map)) return map;
+            if (map.SpawnValueRatio <= MaxSpawnValueRatio && SpawnsFarEnough(map) && map.PassableFraction is >= MinPassable and <= MaxPassable) return map;
         }
         return last! with { UsedFallback = true };
     }
@@ -60,6 +65,33 @@ public static class MapGenerator
             Nearest(pts, Width * 0.88, Height * 0.75),
         };
 
+        var terrain = Terrains(sub, pts);
+        // Spawns and their immediate surroundings are always open ground.
+        foreach (int sp in spawns)
+        {
+            terrain[sp] = Terrain.Plains;
+            foreach (int nb in nbrs[sp]) if (terrain[nb] is Terrain.Mountains or Terrain.Water) terrain[nb] = Terrain.Highlands;
+        }
+        // Land cut off from the spawns becomes lake: every passable tile must be reachable.
+        var open = new bool[n];
+        var q = new Queue<int>();
+        open[spawns[0]] = true;
+        q.Enqueue(spawns[0]);
+        while (q.Count > 0)
+        {
+            int c = q.Dequeue();
+            foreach (int nb in nbrs[c])
+            {
+                if (open[nb] || terrain[nb] is Terrain.Mountains or Terrain.Water) continue;
+                open[nb] = true;
+                q.Enqueue(nb);
+            }
+        }
+        for (int t = 0; t < n; t++) if (!open[t] && terrain[t] is not (Terrain.Mountains or Terrain.Water)) terrain[t] = Terrain.Water;
+        // Impassable tiles drop out of the graph so movement, AI and encirclement never see them.
+        for (int t = 0; t < n; t++)
+            nbrs[t] = terrain[t] is Terrain.Mountains or Terrain.Water ? Array.Empty<int>() : nbrs[t].Where(x => terrain[x] is not (Terrain.Mountains or Terrain.Water)).ToArray();
+
         int depositCount = Math.Max(2, n * 5 / 88);
         var deposit = new bool[n];
         var banned = new HashSet<int>(spawns);
@@ -67,7 +99,7 @@ public static class MapGenerator
         for (int tries = 0; placed < depositCount && tries < 2000; tries++)
         {
             int t = rng.NextInt(0, n - 1);
-            if (deposit[t] || banned.Contains(t)) continue;
+            if (deposit[t] || banned.Contains(t) || terrain[t] is Terrain.Mountains or Terrain.Water) continue;
             bool crowded = false;
             for (int d = 0; d < n && !crowded; d++)
                 if (deposit[d] && HopDistance(nbrs, t, d) < 3) crowded = true;
@@ -92,9 +124,73 @@ public static class MapGenerator
             Polygon = cells.Select(Flatten).ToArray(),
             Neighbors = nbrs,
             Deposit = deposit,
+            Terrain = terrain,
             Spawns = spawns,
             SpawnValueRatio = ratio,
         };
+    }
+
+    /// <summary>Elevation and moisture value-noise (separate sub-seeds) classified into biomes.</summary>
+    private static Terrain[] Terrains(ulong sub, (double X, double Y)[] pts)
+    {
+        ulong elevSeed = SplitMix64.Derive(sub, "elevation");
+        ulong moistSeed = SplitMix64.Derive(sub, "moisture");
+        var result = new Terrain[pts.Length];
+        var elev = new double[pts.Length];
+        var moist = new double[pts.Length];
+        for (int i = 0; i < pts.Length; i++)
+        {
+            double x = pts[i].X / Width * 5, y = pts[i].Y / Height * 3;
+            elev[i] = Fbm(elevSeed, x, y);
+            moist[i] = Fbm(moistSeed, x, y);
+        }
+        // Value-noise fBm clusters tightly around 0.5, so classify by rank to get stable proportions.
+        var sorted = (double[])elev.Clone();
+        Array.Sort(sorted);
+        double At(double q) => sorted[Math.Min(sorted.Length - 1, (int)(q * sorted.Length))];
+        double sea = At(WaterShare), highland = At(1 - MountainShare - HighlandShare), peak = At(1 - MountainShare);
+        // Moisture splits forest from plains at its own median.
+        var msorted = (double[])moist.Clone();
+        Array.Sort(msorted);
+        double wet = msorted[msorted.Length / 2];
+        for (int i = 0; i < pts.Length; i++)
+        {
+            double e = elev[i];
+            result[i] = e >= peak ? Terrain.Mountains
+                      : e < sea ? Terrain.Water
+                      : e >= highland ? Terrain.Highlands
+                      : moist[i] > wet ? Terrain.Forest
+                      : Terrain.Plains;
+        }
+        return result;
+    }
+
+    private static double Fbm(ulong seed, double x, double y)
+    {
+        double sum = 0, amp = 1, norm = 0;
+        for (int o = 0; o < 4; o++)
+        {
+            sum += amp * ValueNoise(seed + (ulong)o, x, y);
+            norm += amp;
+            amp *= 0.5; x *= 2; y *= 2;
+        }
+        return sum / norm;
+    }
+
+    private static double ValueNoise(ulong seed, double x, double y)
+    {
+        int x0 = (int)Math.Floor(x), y0 = (int)Math.Floor(y);
+        double fx = x - x0, fy = y - y0;
+        fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+        double a = Lattice(seed, x0, y0), b = Lattice(seed, x0 + 1, y0);
+        double c = Lattice(seed, x0, y0 + 1), d = Lattice(seed, x0 + 1, y0 + 1);
+        return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
+    }
+
+    private static double Lattice(ulong seed, int x, int y)
+    {
+        ulong s = seed ^ ((ulong)(uint)x * 0x9E3779B97F4A7C15UL) ^ ((ulong)(uint)y * 0xC2B2AE3D27D4EB4FUL);
+        return (SplitMix64.Next(ref s) >> 11) / (double)(1UL << 53);
     }
 
     private static int[] Flatten(List<(double X, double Y)> poly)
