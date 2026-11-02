@@ -8,7 +8,7 @@ public enum Terrain : byte { Plains, Forest, Highlands, Mountains, Water }
 /// </summary>
 public sealed record MapData
 {
-    public const int GeneratorVersion = 2;
+    public const int GeneratorVersion = 3;
     public const int Scale = 16;
 
     public required ulong Seed { get; init; }
@@ -26,6 +26,9 @@ public sealed record MapData
     public required int[][] Neighbors { get; init; }
 
     public required bool[] Deposit { get; init; }
+
+    /// <summary>Per tile: losing it would cut the passable map in two (articulation point).</summary>
+    public required bool[] Chokepoint { get; init; }
 
     /// <summary>Per tile biome. Mountains and Water are ground-impassable: they have no neighbours.</summary>
     public required Terrain[] Terrain { get; init; }
@@ -59,7 +62,7 @@ public sealed record MapData
         Add((long)Seed); Add(Attempt); Add(UsedFallback ? 1 : 0); Add(Width); Add(Height);
         for (int t = 0; t < TileCount; t++)
         {
-            Add(CentroidX[t]); Add(CentroidY[t]); Add(Deposit[t] ? 1 : 0); Add((long)Terrain[t]);
+            Add(CentroidX[t]); Add(CentroidY[t]); Add(Deposit[t] ? 1 : 0); Add(Chokepoint[t] ? 1 : 0); Add((long)Terrain[t]);
             Add(Polygon[t].Length);
             foreach (int v in Polygon[t]) Add(v);
             Add(Neighbors[t].Length);

@@ -16,6 +16,9 @@ public static class MapGenerator
     public const int FairnessHops = 4;
     public const int MinSpawnHops = 8;
     public const int DepositValue = 5;
+    public const int ChokeHops = 3;
+    public const int MaxChokeDifference = 1;
+    public const int MaxMinorHops = 10;   // plan says 6 once 6-12 minors exist; the single central M2 minor sits ~8 hops out
     public const double WaterShare = 0.08;
     public const double MountainShare = 0.09;
     public const double HighlandShare = 0.15;
@@ -30,9 +33,72 @@ public static class MapGenerator
             ulong sub = SplitMix64.Derive(seed, "map:" + attempt);
             MapData map = Build(seed, attempt, sub, cols, rows, usedFallback: false);
             last = map;
-            if (map.SpawnValueRatio <= MaxSpawnValueRatio && SpawnsFarEnough(map) && map.PassableFraction is >= MinPassable and <= MaxPassable) return map;
+            if (Valid(map)) return map;
         }
         return last! with { UsedFallback = true };
+    }
+
+    private static bool Valid(MapData m) =>
+        m.SpawnValueRatio <= MaxSpawnValueRatio
+        && SpawnsFarEnough(m)
+        && m.PassableFraction is >= MinPassable and <= MaxPassable
+        && Math.Abs(ChokesNear(m, m.Spawns[0]) - ChokesNear(m, m.Spawns[1])) <= MaxChokeDifference
+        && MinorNearEverySpawn(m);
+
+    private static int ChokesNear(MapData m, int spawn)
+    {
+        int count = 0;
+        for (int t = 0; t < m.TileCount; t++)
+            if (m.Chokepoint[t] && HopDistance(m.Neighbors, spawn, t) is >= 0 and <= ChokeHops) count++;
+        return count;
+    }
+
+    private static bool MinorNearEverySpawn(MapData m)
+    {
+        int minor = Planetfall.Sim.World.GameState.PickMinorTile(m);
+        return minor != -1 && m.Spawns.All(sp => HopDistance(m.Neighbors, sp, minor) is >= 0 and <= MaxMinorHops);
+    }
+
+    /// <summary>Articulation points of the passable graph (iterative Tarjan).</summary>
+    private static bool[] Chokepoints(int[][] nbrs, int root)
+    {
+        int n = nbrs.Length;
+        var disc = new int[n];
+        var low = new int[n];
+        var parent = new int[n];
+        var next = new int[n];
+        var choke = new bool[n];
+        Array.Fill(parent, -1);
+        int time = 0, rootChildren = 0;
+        var stack = new Stack<int>();
+        disc[root] = low[root] = ++time;
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            int u = stack.Peek();
+            if (next[u] < nbrs[u].Length)
+            {
+                int v = nbrs[u][next[u]++];
+                if (disc[v] == 0)
+                {
+                    parent[v] = u;
+                    if (u == root) rootChildren++;
+                    disc[v] = low[v] = ++time;
+                    stack.Push(v);
+                }
+                else if (v != parent[u]) low[u] = Math.Min(low[u], disc[v]);
+            }
+            else
+            {
+                stack.Pop();
+                int p = parent[u];
+                if (p == -1) continue;
+                low[p] = Math.Min(low[p], low[u]);
+                if (p != root && low[u] >= disc[p]) choke[p] = true;
+            }
+        }
+        if (rootChildren > 1) choke[root] = true;
+        return choke;
     }
 
     private static bool SpawnsFarEnough(MapData m) => HopDistance(m.Neighbors, m.Spawns[0], m.Spawns[1]) >= MinSpawnHops;
@@ -125,6 +191,7 @@ public static class MapGenerator
             Neighbors = nbrs,
             Deposit = deposit,
             Terrain = terrain,
+            Chokepoint = Chokepoints(nbrs, spawns[0]),
             Spawns = spawns,
             SpawnValueRatio = ratio,
         };

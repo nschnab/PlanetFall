@@ -200,6 +200,8 @@ public partial class Match : Node2D
             DrawPolyline(pts.Append(pts[0]).ToArray(), new Color(0, 0, 0, 0.55f), 1.5f);
 
             var c = Centre(t);
+            if (_s.Map.Chokepoint[t])
+                DrawArc(c, 5f, 0f, Mathf.Tau, 12, new Color(1f, 1f, 1f, 0.35f), 1.5f);
             if (_s.Map.Deposit[t])
             {
                 DrawColoredPolygon(new[] { c + new Vector2(0, -9), c + new Vector2(8, 0), c + new Vector2(0, 9), c + new Vector2(-8, 0) },

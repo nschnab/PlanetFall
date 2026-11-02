@@ -103,4 +103,39 @@ public class MapGenTests
             for (int attempt = 0; attempt < 50; attempt++)
                 Assert.True(seen.Add(Planetfall.Sim.Core.SplitMix64.Derive(seed, "map:" + attempt)), $"collision at seed {seed} attempt {attempt}");
     }
+
+    [Fact]
+    public void ChokepointsAreExactlyTheTilesWhoseRemovalDisconnectsTheMap()
+    {
+        for (ulong seed = 1; seed <= 15; seed++)
+        {
+            var m = MapGenerator.Generate(seed);
+            int land = Enumerable.Range(0, m.TileCount).Count(m.Passable);
+            for (int t = 0; t < m.TileCount; t++)
+            {
+                if (!m.Passable(t)) { Assert.False(m.Chokepoint[t]); continue; }
+                int start = m.Neighbors[m.Spawns[0] == t ? m.Spawns[1] : m.Spawns[0]].Length >= 0 ? (m.Spawns[0] == t ? m.Spawns[1] : m.Spawns[0]) : 0;
+                var seen = new HashSet<int> { start };
+                var q = new Queue<int>(new[] { start });
+                while (q.Count > 0)
+                    foreach (int n in m.Neighbors[q.Dequeue()])
+                        if (n != t && seen.Add(n)) q.Enqueue(n);
+                bool disconnects = seen.Count < land - 1;
+                Assert.True(disconnects == m.Chokepoint[t], $"seed {seed} tile {t}: brute force {disconnects}, flagged {m.Chokepoint[t]}");
+            }
+        }
+    }
+
+    [Fact]
+    public void ChokepointsNearEachSpawnAreBalancedAndMapsHaveSome()
+    {
+        int maps = 0, withChokes = 0;
+        for (ulong seed = 1; seed <= 100; seed++)
+        {
+            var m = MapGenerator.Generate(seed);
+            maps++;
+            if (m.Chokepoint.Any(c => c)) withChokes++;
+        }
+        Assert.True(withChokes > maps / 2, $"only {withChokes}/{maps} maps have chokepoints");
+    }
 }

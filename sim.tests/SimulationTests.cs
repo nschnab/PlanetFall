@@ -19,6 +19,10 @@ public class SimulationTests
 
     private static GameState NewGame(Leader? p0 = null) => GameState.New(Map, p0 ?? Commander, Commander);
 
+    /// <summary>A passable tile near the middle of the id range that has neighbours (terrain-proof).</summary>
+    private static int MidTile(GameState s) =>
+        Enumerable.Range(s.Map.TileCount / 2, s.Map.TileCount / 2).First(i => s.Map.Neighbors[i].Length >= 3);
+
     private static readonly IReadOnlyList<Command> None = Array.Empty<Command>();
 
     private static void Run(GameState s, int ticks)
@@ -76,7 +80,7 @@ public class SimulationTests
     public void NoCaptureWhileAnEnemyStackIsOnTheTile()
     {
         var s = NewGame();
-        int t = s.Map.TileCount / 2;
+        int t = MidTile(s);
         s.AddStack(0, t, 10);
         s.AddStack(1, t, 10);
         Run(s, 1);
@@ -115,7 +119,7 @@ public class SimulationTests
     public void BadlyHurtStackRetreatsToAFriendlyNeighbour()
     {
         var s = NewGame();
-        int a = s.Map.TileCount / 2;
+        int a = MidTile(s);
         int safe = s.Map.Neighbors[a][0];
         s.TileOwner[a] = 0;
         s.TileOwner[safe] = 0;
