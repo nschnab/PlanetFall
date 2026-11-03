@@ -18,6 +18,8 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet test sim.tests --configuration Release
+      - name: Map generator sweep (M3 done-test)
+        run: dotnet run -c Release --project tools/mapgen-sweep -- 1000 1 20 10
 
   godot:
     runs-on: ubuntu-latest
