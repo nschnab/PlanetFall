@@ -8,7 +8,7 @@ public enum Terrain : byte { Plains, Forest, Highlands, Mountains, Water }
 /// </summary>
 public sealed record MapData
 {
-    public const int GeneratorVersion = 4;
+    public const int GeneratorVersion = 5;
     public const int Scale = 16;
 
     public required ulong Seed { get; init; }
@@ -29,6 +29,9 @@ public sealed record MapData
 
     /// <summary>Per tile: losing it would cut the passable map in two (articulation point).</summary>
     public required bool[] Chokepoint { get; init; }
+
+    /// <summary>Minor-power clusters: each is a group of connected passable tiles; element 0 is the garrison tile.</summary>
+    public required int[][] MinorClusters { get; init; }
 
     /// <summary>Sorted keys of tile pairs separated by a river; see <see cref="EdgeKey"/>.</summary>
     public required long[] Rivers { get; init; }
@@ -77,6 +80,7 @@ public sealed record MapData
         }
         foreach (int s in Spawns) Add(s);
         foreach (long r in Rivers) Add(r);
+        foreach (var c in MinorClusters) { Add(c.Length); foreach (int t in c) Add(t); }
         return h;
     }
 }

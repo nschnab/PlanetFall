@@ -25,6 +25,7 @@ public partial class Match : Node2D
     {
         new(0.20f, 0.45f, 0.85f), new(0.80f, 0.25f, 0.25f), new(0.85f, 0.65f, 0.15f),
     };
+    private static Color ColorOf(int owner) => OwnerColor[Math.Min(owner, OwnerColor.Length - 1)];
     private static readonly Color Neutral = new(0.24f, 0.26f, 0.30f);
 
     private static readonly Leader Commander =
@@ -56,7 +57,7 @@ public partial class Match : Node2D
     {
         _seed = seed;
         var map = MapGenerator.Generate(seed);
-        _s = GameState.NewWithMinor(map, GameState.PickMinorTile(map), Rules.MinorStrength, Commander, Commander);
+        _s = GameState.NewWithMinors(map, Rules.MinorStrength, Commander, Commander);
         _s.Players[1].MaxStacks = RivalMaxStacks;
         _ai = new RivalAi(1);
         _pending.Clear();
@@ -200,7 +201,7 @@ public partial class Match : Node2D
         for (int t = 0; t < _s.Map.TileCount; t++)
         {
             int o = _s.TileOwner[t];
-            var fill = o == -1 ? Neutral : OwnerColor[o].Darkened(0.35f);
+            var fill = o == -1 ? Neutral : ColorOf(o).Darkened(0.35f);
             switch (_s.Map.Terrain[t])
             {
                 case Terrain.Water: fill = new Color(0.07f, 0.16f, 0.30f); break;
@@ -225,7 +226,7 @@ public partial class Match : Node2D
         foreach (var p in _s.Players)
         {
             var c = Centre(p.Capital);
-            DrawArc(c, 20, 0, Mathf.Tau, 24, p.Minor ? OwnerColor[2] : OwnerColor[p.Id].Lightened(0.4f), 2.5f);
+            DrawArc(c, 20, 0, Mathf.Tau, 24, ColorOf(p.Id).Lightened(0.4f), 2.5f);
         }
     }
 
@@ -234,7 +235,7 @@ public partial class Match : Node2D
         foreach (var st in _s.Stacks)
         {
             if (st.Owner != 0 && st.Target == -1) continue;
-            var col = OwnerColor[st.Owner].Lightened(0.5f);
+            var col = ColorOf(st.Owner).Lightened(0.5f);
             var from = Centre(st.Tile);
             if (st.Target != -1)
             {
@@ -271,7 +272,7 @@ public partial class Match : Node2D
                 var pos = Centre(st.Tile) + new Vector2((i - (list.Count - 1) / 2f) * 26f, 0);
                 bool sel = st.Id == _selected;
                 float r = 11 + Math.Min(st.EffectiveStrength, 20) * 0.35f;
-                DrawCircle(pos, r, OwnerColor[st.Owner]);
+                DrawCircle(pos, r, ColorOf(st.Owner));
                 DrawArc(pos, r, 0, Mathf.Tau, 24, sel ? Colors.White : Colors.Black, sel ? 3f : 1.5f);
                 if (st.Target != -1)
                 {

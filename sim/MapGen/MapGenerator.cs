@@ -18,7 +18,12 @@ public static class MapGenerator
     public const int DepositValue = 5;
     public const int ChokeHops = 3;
     public const int MaxChokeDifference = 1;
-    public const int MaxMinorHops = 10;   // plan says 6 once 6-12 minors exist; the single central M2 minor sits ~8 hops out
+    public const int MaxMinorHops = 6;
+    public const int MinMinors = 6;
+    public const int MaxMinors = 12;
+    public const int MinClusterSize = 3;
+    public const int MaxClusterSize = 8;
+    public const int MinorSpawnClearance = 3;   // cluster tiles stay more than this many hops from a spawn
     public const double WaterShare = 0.08;
     public const double MountainShare = 0.09;
     public const double HighlandShare = 0.15;
@@ -53,10 +58,59 @@ public static class MapGenerator
         return count;
     }
 
-    private static bool MinorNearEverySpawn(MapData m)
+    private static bool MinorNearEverySpawn(MapData m) =>
+        m.MinorClusters.Length >= MinMinors
+        && m.Spawns.All(sp => m.MinorClusters.Any(c => HopDistance(m.Neighbors, sp, c[0]) is >= 0 and <= MaxMinorHops));
+
+    /// <summary>
+    /// 6-12 clusters of 3-8 connected passable tiles, kept clear of the spawns and of each other
+    /// (a one-tile gap between clusters). Placed greedily; the count may fall short on a cramped map,
+    /// which the validity check then rejects.
+    /// </summary>
+    private static int[][] Minors(ulong sub, int[][] nbrs, int[] spawns)
     {
-        int minor = Planetfall.Sim.World.GameState.PickMinorTile(m);
-        return minor != -1 && m.Spawns.All(sp => HopDistance(m.Neighbors, sp, minor) is >= 0 and <= MaxMinorHops);
+        var rng = new Pcg32(SplitMix64.Derive(sub, "minors"));
+        int n = nbrs.Length;
+        var clear = new bool[n];
+        foreach (int sp in spawns)
+        {
+            var dist = new int[n];
+            Array.Fill(dist, -1);
+            var q = new Queue<int>();
+            dist[sp] = 0;
+            q.Enqueue(sp);
+            while (q.Count > 0)
+            {
+                int c = q.Dequeue();
+                foreach (int nb in nbrs[c])
+                    if (dist[nb] == -1) { dist[nb] = dist[c] + 1; q.Enqueue(nb); }
+            }
+            for (int t = 0; t < n; t++) if (dist[t] != -1 && dist[t] <= MinorSpawnClearance) clear[t] = true;
+        }
+
+        var taken = new bool[n];     // in a cluster, or adjacent to one
+        var clusters = new List<int[]>();
+        int wanted = rng.NextInt(MinMinors, MaxMinors);
+        for (int tries = 0; clusters.Count < wanted && tries < 400; tries++)
+        {
+            int seed = rng.NextInt(0, n - 1);
+            if (nbrs[seed].Length == 0 || clear[seed] || taken[seed]) continue;
+            int size = rng.NextInt(MinClusterSize, MaxClusterSize);
+            var cluster = new List<int> { seed };
+            var inCluster = new HashSet<int> { seed };
+            while (cluster.Count < size)
+            {
+                var options = cluster.SelectMany(c => nbrs[c]).Where(t => !inCluster.Contains(t) && !clear[t] && !taken[t]).Distinct().ToList();
+                if (options.Count == 0) break;
+                int pick = options[rng.NextInt(0, options.Count - 1)];
+                cluster.Add(pick);
+                inCluster.Add(pick);
+            }
+            if (cluster.Count < MinClusterSize) continue;
+            foreach (int t in cluster) { taken[t] = true; foreach (int nb in nbrs[t]) taken[nb] = true; }
+            clusters.Add(cluster.ToArray());
+        }
+        return clusters.ToArray();
     }
 
     /// <summary>
@@ -236,6 +290,7 @@ public static class MapGenerator
             Deposit = deposit,
             Terrain = terrain,
             Chokepoint = Chokepoints(nbrs, spawns[0]),
+            MinorClusters = Minors(sub, nbrs, spawns),
             Rivers = Rivers(sub, pts, nbrs, terrain, elev, spawns),
             Spawns = spawns,
             SpawnValueRatio = ratio,

@@ -77,6 +77,30 @@ public sealed class GameState
         return g;
     }
 
+    /// <summary>The majors plus one static minor power per map cluster, each owning its whole cluster and garrisoning its first tile.</summary>
+    public static GameState NewWithMinors(MapData map, int minorStrength, params Leader[] leaders)
+    {
+        var s = New(map, leaders);
+        var minors = map.MinorClusters.Select((c, i) => new Player
+        {
+            Id = leaders.Length + i,
+            Leader = Leader.Parse($$"""{ "id": "minor{{i}}", "name": "Minor Power {{i + 1}}" }"""),
+            Capital = c[0],
+            Minor = true,
+        }).ToArray();
+        var players = s.Players.Concat(minors).ToArray();
+        var g = new GameState { Map = map, Players = players, TileOwner = s.TileOwner };
+        g.Stacks.AddRange(s.Stacks);
+        g.NextStackId = s.NextStackId;
+        g.CapitalHeld = new int[players.Length];
+        foreach (var m in minors)
+        {
+            foreach (int t in map.MinorClusters[m.Id - leaders.Length]) g.TileOwner[t] = m.Id;
+            g.AddStack(m.Id, m.Capital, minorStrength);
+        }
+        return g;
+    }
+
     /// <summary>Deposit nearest the map centre that is more than three hops from every spawn.</summary>
     public static int PickMinorTile(MapData map)
     {

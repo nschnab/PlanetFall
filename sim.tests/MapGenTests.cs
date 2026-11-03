@@ -173,4 +173,37 @@ public class MapGenTests
         long plain = Planetfall.Sim.Systems.Simulation.HopNeeded(s, st);
         Assert.Equal(plain * 3 / 2, river);
     }
+
+    [Fact]
+    public void MinorClustersAreSizedSeparatedAndClearOfSpawns()
+    {
+        for (ulong seed = 1; seed <= 60; seed++)
+        {
+            var m = MapGenerator.Generate(seed);
+            Assert.InRange(m.MinorClusters.Length, MapGenerator.MinMinors, MapGenerator.MaxMinors);
+            var all = m.MinorClusters.SelectMany(c => c).ToList();
+            Assert.Equal(all.Count, all.Distinct().Count());
+            foreach (var c in m.MinorClusters)
+            {
+                Assert.InRange(c.Length, MapGenerator.MinClusterSize, MapGenerator.MaxClusterSize);
+                Assert.All(c, t => Assert.True(m.Passable(t)));
+                foreach (int sp in m.Spawns) Assert.All(c, t => Assert.True(MapGenerator.HopDistance(m.Neighbors, sp, t) > MapGenerator.MinorSpawnClearance));
+            }
+            // no two clusters touch
+            for (int a = 0; a < m.MinorClusters.Length; a++)
+            for (int b = a + 1; b < m.MinorClusters.Length; b++)
+                Assert.DoesNotContain(m.MinorClusters[a], t => m.Neighbors[t].Intersect(m.MinorClusters[b]).Any());
+        }
+    }
+
+    [Fact]
+    public void EverySpawnHasAMinorClusterWithinSixHops()
+    {
+        for (ulong seed = 1; seed <= 60; seed++)
+        {
+            var m = MapGenerator.Generate(seed);
+            foreach (int sp in m.Spawns)
+                Assert.Contains(m.MinorClusters, c => MapGenerator.HopDistance(m.Neighbors, sp, c[0]) is >= 0 and <= MapGenerator.MaxMinorHops);
+        }
+    }
 }

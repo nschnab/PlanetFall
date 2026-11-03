@@ -346,4 +346,21 @@ public class MatchTests
         s.Players[0].Supply = Rules.StackCostMilli;
         Assert.DoesNotContain(Simulation.Step(s, None), e => e is StackSpawned { Owner: 0 });
     }
+
+    [Fact]
+    public void EveryMinorClusterIsOwnedAndGarrisonedAtStart()
+    {
+        var map = MapGenerator.Generate(5);
+        var s = GameState.NewWithMinors(map, Rules.MinorStrength, Commander, Commander);
+        Assert.Equal(2 + map.MinorClusters.Length, s.Players.Length);
+        for (int i = 0; i < map.MinorClusters.Length; i++)
+        {
+            var minor = s.Players[2 + i];
+            Assert.True(minor.Minor);
+            Assert.All(map.MinorClusters[i], t => Assert.Equal(minor.Id, s.TileOwner[t]));
+            Assert.Equal(map.MinorClusters[i][0], s.Stacks.Single(x => x.Owner == minor.Id).Tile);
+        }
+        Run(s, 300);
+        Assert.False(s.Over);
+    }
 }
