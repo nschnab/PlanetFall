@@ -220,7 +220,12 @@ public partial class Match : Node2D
             if (_s.Map.Deposit[t])
             {
                 DrawColoredPolygon(new[] { c + new Vector2(0, -9), c + new Vector2(8, 0), c + new Vector2(0, 9), c + new Vector2(-8, 0) },
-                    new Color(1f, 0.85f, 0.25f, 0.9f));
+                    _s.Map.DepositKinds[t] switch
+                    {
+                        DepositKind.Energy => new Color(0.35f, 0.90f, 1f, 0.9f),
+                        DepositKind.Relic => new Color(0.85f, 0.45f, 1f, 0.9f),
+                        _ => new Color(1f, 0.85f, 0.25f, 0.9f),
+                    });
             }
         }
         foreach (var p in _s.Players)

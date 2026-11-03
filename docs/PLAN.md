@@ -450,3 +450,4 @@ Also resolved: victory is military capitulation only; multiplayer is v1.1.
 3. **Release target** (Steam, itch, personal)? Affects M9 only.
 4. **First leaders after v1:** any concepts you already want? Not blocking.
 - **M3d minors:** 6-12 clusters of 3-8 connected passable tiles (never within 3 hops of a spawn, never touching each other); each is one static minor power garrisoning its first tile. Every spawn has a cluster within 6 hops (`MaxMinorHops` restored to 6). Client uses `GameState.NewWithMinors`.
+- **M3e deposit kinds:** Alloy / Energy / Relic. Each spawn gets an Energy deposit near it; ~1/6 of deposits are Relics, only >=5 hops from every spawn. Data only for now (all deposits still act as mines); economy use lands in M4. Drawn gold / cyan / violet.

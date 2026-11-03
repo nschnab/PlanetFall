@@ -21,6 +21,7 @@ public static class MapGenerator
     public const int MaxMinorHops = 6;
     public const int MinMinors = 6;
     public const int MaxMinors = 12;
+    public const int RelicMinHops = 5;   // relics sit away from spawns so they are contested
     public const int MinClusterSize = 3;
     public const int MaxClusterSize = 8;
     public const int MinorSpawnClearance = 3;   // cluster tiles stay more than this many hops from a spawn
@@ -272,6 +273,8 @@ public static class MapGenerator
             placed++;
         }
 
+        var kinds = DepositKinds(sub, nbrs, deposit, spawns);
+
         double v0 = RegionValue(nbrs, deposit, spawns[0]);
         double v1 = RegionValue(nbrs, deposit, spawns[1]);
         double ratio = Math.Max(v0, v1) / Math.Min(v0, v1);
@@ -290,11 +293,39 @@ public static class MapGenerator
             Deposit = deposit,
             Terrain = terrain,
             Chokepoint = Chokepoints(nbrs, spawns[0]),
+            DepositKinds = kinds,
             MinorClusters = Minors(sub, nbrs, spawns),
             Rivers = Rivers(sub, pts, nbrs, terrain, elev, spawns),
             Spawns = spawns,
             SpawnValueRatio = ratio,
         };
+    }
+
+    /// <summary>
+    /// Quotas: every spawn gets an Alloy deposit and an Energy deposit within the fairness radius when
+    /// it has two or more nearby; roughly a sixth of the rest become Relics, only beyond RelicMinHops
+    /// of every spawn; the remainder are Alloy.
+    /// </summary>
+    private static DepositKind[] DepositKinds(ulong sub, int[][] nbrs, bool[] deposit, int[] spawns)
+    {
+        var rng = new Pcg32(SplitMix64.Derive(sub, "depositKinds"));
+        var kinds = new DepositKind[deposit.Length];
+        var all = Enumerable.Range(0, deposit.Length).Where(t => deposit[t]).ToList();
+        foreach (int t in all) kinds[t] = DepositKind.Alloy;
+        foreach (int sp in spawns)
+        {
+            var near = all.Where(t => HopDistance(nbrs, sp, t) is >= 0 and <= FairnessHops).ToList();
+            if (near.Count >= 2) kinds[near[rng.NextInt(0, near.Count - 1)]] = DepositKind.Energy;
+        }
+        var far = all.Where(t => kinds[t] == DepositKind.Alloy && spawns.All(sp => HopDistance(nbrs, sp, t) is < 0 or >= RelicMinHops)).ToList();
+        int relics = Math.Max(1, all.Count / 6);
+        for (int i = 0; i < relics && far.Count > 0; i++)
+        {
+            int k = rng.NextInt(0, far.Count - 1);
+            kinds[far[k]] = DepositKind.Relic;
+            far.RemoveAt(k);
+        }
+        return kinds;
     }
 
     /// <summary>Elevation and moisture value-noise (separate sub-seeds) classified into biomes.</summary>

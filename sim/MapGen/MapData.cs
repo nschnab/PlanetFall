@@ -2,13 +2,15 @@ namespace Planetfall.Sim.MapGen;
 
 public enum Terrain : byte { Plains, Forest, Highlands, Mountains, Water }
 
+public enum DepositKind : byte { None, Alloy, Energy, Relic }
+
 /// <summary>
 /// Plain generated map. Coordinates are map units x16 (integers) so a saved map and a
 /// regenerated one compare byte-for-byte. Generation may use doubles; nothing downstream does.
 /// </summary>
 public sealed record MapData
 {
-    public const int GeneratorVersion = 5;
+    public const int GeneratorVersion = 6;
     public const int Scale = 16;
 
     public required ulong Seed { get; init; }
@@ -29,6 +31,9 @@ public sealed record MapData
 
     /// <summary>Per tile: losing it would cut the passable map in two (articulation point).</summary>
     public required bool[] Chokepoint { get; init; }
+
+    /// <summary>What each deposit tile yields; None where there is no deposit.</summary>
+    public required DepositKind[] DepositKinds { get; init; }
 
     /// <summary>Minor-power clusters: each is a group of connected passable tiles; element 0 is the garrison tile.</summary>
     public required int[][] MinorClusters { get; init; }
@@ -72,7 +77,7 @@ public sealed record MapData
         Add((long)Seed); Add(Attempt); Add(UsedFallback ? 1 : 0); Add(Width); Add(Height);
         for (int t = 0; t < TileCount; t++)
         {
-            Add(CentroidX[t]); Add(CentroidY[t]); Add(Deposit[t] ? 1 : 0); Add(Chokepoint[t] ? 1 : 0); Add((long)Terrain[t]);
+            Add(CentroidX[t]); Add(CentroidY[t]); Add(Deposit[t] ? 1 : 0); Add(Chokepoint[t] ? 1 : 0); Add((long)DepositKinds[t]); Add((long)Terrain[t]);
             Add(Polygon[t].Length);
             foreach (int v in Polygon[t]) Add(v);
             Add(Neighbors[t].Length);

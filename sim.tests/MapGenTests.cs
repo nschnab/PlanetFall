@@ -206,4 +206,24 @@ public class MapGenTests
                 Assert.Contains(m.MinorClusters, c => MapGenerator.HopDistance(m.Neighbors, sp, c[0]) is >= 0 and <= MapGenerator.MaxMinorHops);
         }
     }
+
+    [Fact]
+    public void DepositKindsMatchDepositsAndMeetQuotas()
+    {
+        int withRelic = 0;
+        for (ulong seed = 1; seed <= 100; seed++)
+        {
+            var m = MapGenerator.Generate(seed);
+            for (int t = 0; t < m.TileCount; t++)
+                Assert.Equal(m.Deposit[t], m.DepositKinds[t] != DepositKind.None);
+            Assert.Contains(m.DepositKinds, k => k == DepositKind.Alloy);
+            Assert.Contains(m.DepositKinds, k => k == DepositKind.Energy);
+            foreach (int sp in m.Spawns)
+                for (int t = 0; t < m.TileCount; t++)
+                    if (m.DepositKinds[t] == DepositKind.Relic)
+                        Assert.True(MapGenerator.HopDistance(m.Neighbors, sp, t) is < 0 or >= MapGenerator.RelicMinHops);
+            if (m.DepositKinds.Contains(DepositKind.Relic)) withRelic++;
+        }
+        Assert.True(withRelic >= 70, $"only {withRelic}/100 maps have a relic");
+    }
 }
