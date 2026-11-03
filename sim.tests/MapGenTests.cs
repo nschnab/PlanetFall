@@ -136,7 +136,8 @@ public class MapGenTests
             maps++;
             if (m.Chokepoint.Any(c => c)) withChokes++;
         }
-        Assert.True(withChokes > maps / 2, $"only {withChokes}/{maps} maps have chokepoints");
+        // the east-west wrap adds loops, so fewer maps have bottlenecks than a flat map did
+        Assert.True(withChokes > maps / 4, $"only {withChokes}/{maps} maps have chokepoints");
     }
 
     [Fact]
@@ -225,5 +226,36 @@ public class MapGenTests
             if (m.DepositKinds.Contains(DepositKind.Relic)) withRelic++;
         }
         Assert.True(withRelic >= 70, $"only {withRelic}/100 maps have a relic");
+    }
+
+    [Fact]
+    public void EastAndWestEdgesAreJoinedAndTopAndBottomAreNot()
+    {
+        for (ulong seed = 1; seed <= 50; seed++)
+        {
+            var m = MapGenerator.Generate(seed);
+            int half = m.Width * MapData.Scale / 2;
+            var seam = new List<(int A, int B)>();
+            for (int a = 0; a < m.TileCount; a++)
+                foreach (int b in m.Neighbors[a])
+                    if (a < b && Math.Abs(m.CentroidX[a] - m.CentroidX[b]) > half) seam.Add((a, b));
+            Assert.True(seam.Count >= 3, $"seed {seed}: only {seam.Count} seam links");
+            // every seam link joins a western tile to an eastern one
+            Assert.All(seam, l => Assert.True(Math.Abs(m.CentroidX[l.A] - m.CentroidX[l.B]) > m.Width * MapData.Scale * 0.6));
+            // no link crosses the top/bottom: neighbours are never a map-height apart
+            for (int a = 0; a < m.TileCount; a++)
+                foreach (int b in m.Neighbors[a])
+                    Assert.True(Math.Abs(m.CentroidY[a] - m.CentroidY[b]) < m.Height * MapData.Scale / 2);
+        }
+    }
+
+    [Fact]
+    public void SpawnsAreFarApartInBothDirectionsAroundTheCylinder()
+    {
+        for (ulong seed = 1; seed <= 50; seed++)
+        {
+            var m = MapGenerator.Generate(seed);
+            Assert.True(MapGenerator.HopDistance(m.Neighbors, m.Spawns[0], m.Spawns[1]) >= MapGenerator.MinSpawnHops);
+        }
     }
 }

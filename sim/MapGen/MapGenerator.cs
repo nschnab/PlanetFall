@@ -226,8 +226,8 @@ public static class MapGenerator
 
         int[] spawns =
         {
-            Nearest(pts, Width * 0.12, Height * 0.25),
-            Nearest(pts, Width * 0.88, Height * 0.75),
+            Nearest(pts, Width * 0.25, Height * 0.25),
+            Nearest(pts, Width * 0.75, Height * 0.75),
         };
 
         var terrain = Terrains(sub, pts, out var elev);
@@ -338,7 +338,7 @@ public static class MapGenerator
         var moist = new double[pts.Length];
         for (int i = 0; i < pts.Length; i++)
         {
-            double x = pts[i].X / Width * 5, y = pts[i].Y / Height * 3;
+            double x = pts[i].X / Width * NoisePeriodX, y = pts[i].Y / Height * 3;
             elev[i] = Fbm(elevSeed, x, y);
             moist[i] = Fbm(moistSeed, x, y);
         }
@@ -368,20 +368,23 @@ public static class MapGenerator
         double sum = 0, amp = 1, norm = 0;
         for (int o = 0; o < 4; o++)
         {
-            sum += amp * ValueNoise(seed + (ulong)o, x, y);
+            sum += amp * ValueNoise(seed + (ulong)o, x, y, NoisePeriodX << o);
             norm += amp;
             amp *= 0.5; x *= 2; y *= 2;
         }
         return sum / norm;
     }
 
-    private static double ValueNoise(ulong seed, double x, double y)
+    private const int NoisePeriodX = 5;   // lattice cells across the map at the first octave; noise wraps east-west
+
+    private static double ValueNoise(ulong seed, double x, double y, int periodX)
     {
         int x0 = (int)Math.Floor(x), y0 = (int)Math.Floor(y);
         double fx = x - x0, fy = y - y0;
         fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
-        double a = Lattice(seed, x0, y0), b = Lattice(seed, x0 + 1, y0);
-        double c = Lattice(seed, x0, y0 + 1), d = Lattice(seed, x0 + 1, y0 + 1);
+        int xa = ((x0 % periodX) + periodX) % periodX, xb = (xa + 1) % periodX;
+        double a = Lattice(seed, xa, y0), b = Lattice(seed, xb, y0);
+        double c = Lattice(seed, xa, y0 + 1), d = Lattice(seed, xb, y0 + 1);
         return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
     }
 
@@ -402,6 +405,8 @@ public static class MapGenerator
         return o;
     }
 
+    private static readonly int[] WrapShifts = { 0, -1, 1 };
+
     private static List<(double X, double Y)>[] Voronoi((double X, double Y)[] pts, double reach)
     {
         var cells = new List<(double X, double Y)>[pts.Length];
@@ -409,12 +414,15 @@ public static class MapGenerator
         for (int i = 0; i < pts.Length; i++)
         {
             var poly = new List<(double X, double Y)> { (0, 0), (Width, 0), (Width, Height), (0, Height) };
+            // Ghost copies one map-width east and west make the east and west edges meet (cylinder).
             for (int j = 0; j < pts.Length; j++)
+            foreach (int shift in WrapShifts)
             {
-                if (i == j) continue;
-                double dx = pts[j].X - pts[i].X, dy = pts[j].Y - pts[i].Y;
+                if (i == j && shift == 0) continue;
+                var other = (pts[j].X + shift * Width, pts[j].Y);
+                double dx = other.Item1 - pts[i].X, dy = other.Item2 - pts[i].Y;
                 if (dx * dx + dy * dy > maxD2) continue;
-                poly = Clip(poly, pts[i], pts[j]);
+                poly = Clip(poly, pts[i], other);
             }
             cells[i] = poly;
         }
@@ -468,8 +476,11 @@ public static class MapGenerator
             var list = new List<int>();
             for (int j = 0; j < n; j++)
             {
-                if (i == j) continue;
-                if (SharesEdge(pts[i], pts[j], cells[i])) list.Add(j);
+                foreach (int shift in WrapShifts)
+                {
+                    if (i == j) continue;
+                    if (SharesEdge(pts[i], (pts[j].X + shift * Width, pts[j].Y), cells[i])) { list.Add(j); break; }
+                }
             }
             result[i] = list.ToArray();
         }

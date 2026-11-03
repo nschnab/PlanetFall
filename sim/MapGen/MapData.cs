@@ -10,7 +10,7 @@ public enum DepositKind : byte { None, Alloy, Energy, Relic }
 /// </summary>
 public sealed record MapData
 {
-    public const int GeneratorVersion = 6;
+    public const int GeneratorVersion = 7;
     public const int Scale = 16;
 
     public required ulong Seed { get; init; }

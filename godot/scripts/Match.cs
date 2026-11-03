@@ -259,6 +259,15 @@ public partial class Match : Node2D
 
     private void DrawArrow(Vector2 a, Vector2 b, Color col, float w)
     {
+        // The map wraps east-west: across the seam, draw the arrow leaving one edge and entering the other.
+        float span = 1280f * MapScale;
+        if (Math.Abs(a.X - b.X) > span / 2)
+        {
+            float shift = a.X < b.X ? -span : span;
+            DrawLine(a, b + new Vector2(shift, 0), col, w);
+            DrawArrow(a - new Vector2(shift, 0), b, col, w);
+            return;
+        }
         DrawLine(a, b, col, w);
         var dir = (b - a).Normalized();
         var side = new Vector2(-dir.Y, dir.X);
