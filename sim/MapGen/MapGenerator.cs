@@ -59,6 +59,50 @@ public static class MapGenerator
         return minor != -1 && m.Spawns.All(sp => HopDistance(m.Neighbors, sp, minor) is >= 0 and <= MaxMinorHops);
     }
 
+    /// <summary>
+    /// Rivers start in highlands and walk downhill tile to tile. The river itself runs along the
+    /// boundary between each path tile and its neighbours on the left, so it separates the path
+    /// from that bank without closing the way along the path.
+    /// </summary>
+    private static long[] Rivers(ulong sub, (double X, double Y)[] pts, int[][] nbrs, Terrain[] terrain, double[] elev, int[] spawns)
+    {
+        var rng = new Pcg32(SplitMix64.Derive(sub, "rivers"));
+        var edges = new SortedSet<long>();
+        var highlands = Enumerable.Range(0, pts.Length).Where(t => terrain[t] == Terrain.Highlands && nbrs[t].Length > 0).ToList();
+        int wanted = Math.Min(4, highlands.Count);
+        var used = new HashSet<int>();
+        for (int r = 0; r < wanted; r++)
+        {
+            int src = highlands[rng.NextInt(0, highlands.Count - 1)];
+            var path = new List<int> { src };
+            var seen = new HashSet<int> { src };
+            while (path.Count < 14)
+            {
+                int cur = path[^1];
+                int best = -1;
+                foreach (int nb in nbrs[cur])
+                    if (!seen.Contains(nb) && elev[nb] < elev[cur] && (best == -1 || elev[nb] < elev[best])) best = nb;
+                if (best == -1) break;
+                path.Add(best);
+                seen.Add(best);
+            }
+            if (path.Count < 4) continue;
+            for (int i = 0; i < path.Count; i++)
+            {
+                var prev = path[Math.Max(i - 1, 0)];
+                var next = path[Math.Min(i + 1, path.Count - 1)];
+                double dx = pts[next].X - pts[prev].X, dy = pts[next].Y - pts[prev].Y;
+                foreach (int nb in nbrs[path[i]])
+                {
+                    if (seen.Contains(nb) || spawns.Contains(nb) || spawns.Contains(path[i])) continue;
+                    double vx = pts[nb].X - pts[path[i]].X, vy = pts[nb].Y - pts[path[i]].Y;
+                    if (dx * vy - dy * vx > 0) edges.Add(MapData.EdgeKey(path[i], nb));
+                }
+            }
+        }
+        return edges.ToArray();
+    }
+
     /// <summary>Articulation points of the passable graph (iterative Tarjan).</summary>
     private static bool[] Chokepoints(int[][] nbrs, int root)
     {
@@ -131,7 +175,7 @@ public static class MapGenerator
             Nearest(pts, Width * 0.88, Height * 0.75),
         };
 
-        var terrain = Terrains(sub, pts);
+        var terrain = Terrains(sub, pts, out var elev);
         // Spawns and their immediate surroundings are always open ground.
         foreach (int sp in spawns)
         {
@@ -192,18 +236,19 @@ public static class MapGenerator
             Deposit = deposit,
             Terrain = terrain,
             Chokepoint = Chokepoints(nbrs, spawns[0]),
+            Rivers = Rivers(sub, pts, nbrs, terrain, elev, spawns),
             Spawns = spawns,
             SpawnValueRatio = ratio,
         };
     }
 
     /// <summary>Elevation and moisture value-noise (separate sub-seeds) classified into biomes.</summary>
-    private static Terrain[] Terrains(ulong sub, (double X, double Y)[] pts)
+    private static Terrain[] Terrains(ulong sub, (double X, double Y)[] pts, out double[] elev)
     {
         ulong elevSeed = SplitMix64.Derive(sub, "elevation");
         ulong moistSeed = SplitMix64.Derive(sub, "moisture");
         var result = new Terrain[pts.Length];
-        var elev = new double[pts.Length];
+        elev = new double[pts.Length];
         var moist = new double[pts.Length];
         for (int i = 0; i < pts.Length; i++)
         {

@@ -100,6 +100,14 @@ public static class Simulation
 
     // ---- movement -------------------------------------------------------------------------
 
+    /// <summary>Timer units a stack's current hop needs; river crossings take longer.</summary>
+    public static long HopNeeded(GameState s, Stack st)
+    {
+        long needed = s.Stat(st.Owner, Rules.StatMoveDelay, Rules.HopDelayMs) * 1000;
+        if (st.Target != -1 && s.Map.IsRiver(st.Tile, st.Target)) needed = needed * Rules.RiverCrossPermille / 1000;
+        return needed;
+    }
+
     private static void Movement(GameState s, List<SimEvent> events)
     {
         // Phase A: idle stacks with a route begin their next hop.
@@ -126,7 +134,7 @@ public static class Simulation
             long rate = s.Stat(st.Owner, Rules.StatMoveSpeed, Rules.SpeedPermille);
             if (engaged[i]) rate = rate * Rules.BattleSlowPermille / 1000;
             st.Timer += Rules.TickMs * rate;
-            long needed = s.Stat(st.Owner, Rules.StatMoveDelay, Rules.HopDelayMs) * 1000;
+            long needed = HopNeeded(s, st);
             if (st.Timer >= needed)
             {
                 st.Tile = st.Target;

@@ -8,7 +8,7 @@ public enum Terrain : byte { Plains, Forest, Highlands, Mountains, Water }
 /// </summary>
 public sealed record MapData
 {
-    public const int GeneratorVersion = 3;
+    public const int GeneratorVersion = 4;
     public const int Scale = 16;
 
     public required ulong Seed { get; init; }
@@ -29,6 +29,13 @@ public sealed record MapData
 
     /// <summary>Per tile: losing it would cut the passable map in two (articulation point).</summary>
     public required bool[] Chokepoint { get; init; }
+
+    /// <summary>Sorted keys of tile pairs separated by a river; see <see cref="EdgeKey"/>.</summary>
+    public required long[] Rivers { get; init; }
+
+    public static long EdgeKey(int a, int b) => a < b ? (long)a * 100_000 + b : (long)b * 100_000 + a;
+
+    public bool IsRiver(int a, int b) => Array.BinarySearch(Rivers, EdgeKey(a, b)) >= 0;
 
     /// <summary>Per tile biome. Mountains and Water are ground-impassable: they have no neighbours.</summary>
     public required Terrain[] Terrain { get; init; }
@@ -69,6 +76,7 @@ public sealed record MapData
             foreach (int n in Neighbors[t]) Add(n);
         }
         foreach (int s in Spawns) Add(s);
+        foreach (long r in Rivers) Add(r);
         return h;
     }
 }

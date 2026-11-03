@@ -166,6 +166,7 @@ public partial class Match : Node2D
         _buttons.Clear();
         DrawRect(new Rect2(0, 0, 1280, 720), new Color(0.07f, 0.08f, 0.10f));
         DrawTiles();
+        DrawRivers();
         DrawRoutes();
         DrawStacks();
         DrawHud();
@@ -179,6 +180,19 @@ public partial class Match : Node2D
         for (int i = 0; i < pts.Length; i++)
             pts[i] = ToScreen(raw[i * 2] / (float)MapData.Scale, raw[i * 2 + 1] / (float)MapData.Scale);
         return pts;
+    }
+
+    private void DrawRivers()
+    {
+        var blue = new Color(0.30f, 0.60f, 0.95f, 0.9f);
+        foreach (long key in _s.Map.Rivers)
+        {
+            int a = (int)(key / 100_000), b = (int)(key % 100_000);
+            var pa = Poly(a);
+            var pb = Poly(b);
+            var shared = pa.Where(v => pb.Any(w => v.DistanceTo(w) < 2f)).ToList();
+            if (shared.Count >= 2) DrawLine(shared[0], shared[1], blue, 3f);
+        }
     }
 
     private void DrawTiles()
@@ -261,7 +275,7 @@ public partial class Match : Node2D
                 DrawArc(pos, r, 0, Mathf.Tau, 24, sel ? Colors.White : Colors.Black, sel ? 3f : 1.5f);
                 if (st.Target != -1)
                 {
-                    long need = _s.Stat(st.Owner, Rules.StatMoveDelay, Rules.HopDelayMs) * 1000;
+                    long need = Simulation.HopNeeded(_s, st);
                     float frac = Mathf.Clamp(st.Timer / (float)need, 0f, 1f);
                     DrawArc(pos, r + 5, -Mathf.Pi / 2, -Mathf.Pi / 2 + Mathf.Tau * frac, 24, Colors.White, 2.5f);
                 }

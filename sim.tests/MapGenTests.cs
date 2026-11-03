@@ -138,4 +138,39 @@ public class MapGenTests
         }
         Assert.True(withChokes > maps / 2, $"only {withChokes}/{maps} maps have chokepoints");
     }
+
+    [Fact]
+    public void RiversSitBetweenAdjacentPassableTilesAndMostMapsHaveThem()
+    {
+        int withRivers = 0;
+        for (ulong seed = 1; seed <= 100; seed++)
+        {
+            var m = MapGenerator.Generate(seed);
+            foreach (long key in m.Rivers)
+            {
+                int a = (int)(key / 100_000), b = (int)(key % 100_000);
+                Assert.Contains(b, m.Neighbors[a]);
+                Assert.True(m.IsRiver(b, a));
+            }
+            if (m.Rivers.Length > 0) withRivers++;
+        }
+        Assert.True(withRivers > 70, $"only {withRivers}/100 maps have rivers");
+    }
+
+    [Fact]
+    public void CrossingARiverTakesFiftyPercentLonger()
+    {
+        var m = Enumerable.Range(1, 200).Select(i => MapGenerator.Generate((ulong)i)).First(x => x.Rivers.Length > 0);
+        long key = m.Rivers[0];
+        int a = (int)(key / 100_000), b = (int)(key % 100_000);
+        var s = Planetfall.Sim.World.GameState.New(m, Planetfall.Sim.Data.Leader.Parse("""{ "id": "c", "name": "C" }"""), Planetfall.Sim.Data.Leader.Parse("""{ "id": "c", "name": "C" }"""));
+        s.Stacks.Clear();
+        var st = s.AddStack(0, a, 5);
+        st.Target = b;
+        long river = Planetfall.Sim.Systems.Simulation.HopNeeded(s, st);
+        var other = m.Neighbors[a].First(n => !m.IsRiver(a, n));
+        st.Target = other;
+        long plain = Planetfall.Sim.Systems.Simulation.HopNeeded(s, st);
+        Assert.Equal(plain * 3 / 2, river);
+    }
 }
