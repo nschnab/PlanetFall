@@ -11,14 +11,36 @@ public sealed class Player
     public required Leader Leader { get; init; }
     public int Capital { get; init; }
 
-    /// <summary>Alloy in thousandths.</summary>
+    /// <summary>Alloy in thousandths: buys stacks and structures.</summary>
     public long Supply { get; set; }
+
+    /// <summary>Energy in thousandths: pays unit upkeep. Never below zero.</summary>
+    public long Energy { get; set; }
+
+    /// <summary>Influence in thousandths: diplomacy and minor integration (from Relic sites).</summary>
+    public long Influence { get; set; }
+
+    /// <summary>True while upkeep outruns Energy: no recruiting, and alloy income is halved.</summary>
+    public bool Starved { get; set; }
+
+    /// <summary>When true the sim buys infantry stacks automatically whenever alloy allows (the M2 behaviour).</summary>
+    public bool AutoRecruit { get; set; } = true;
 
     /// <summary>Minor powers hold ground and never expand, buy stacks, or count for victory.</summary>
     public bool Minor { get; init; }
 
     /// <summary>Most stacks this player may field at once; recruiting pauses at the cap.</summary>
     public int MaxStacks { get; set; } = int.MaxValue;
+}
+
+/// <summary>A structure being built; it progresses only while the builder stack stands still on the tile.</summary>
+public sealed class Construction
+{
+    public int Tile { get; init; }
+    public int Owner { get; init; }
+    public int StackId { get; init; }
+    public required string Structure { get; init; }
+    public int TicksLeft { get; set; }
 }
 
 public sealed class GameState
@@ -28,6 +50,15 @@ public sealed class GameState
 
     /// <summary>Owner player id per tile, -1 for neutral.</summary>
     public required int[] TileOwner { get; init; }
+
+    public Catalog Catalog { get; set; } = Catalog.Default;
+
+    private string?[]? _structure;
+
+    /// <summary>Structure id per tile, or null.</summary>
+    public string?[] Structure => _structure ??= new string?[Map.TileCount];
+
+    public List<Construction> Constructions { get; } = new();
 
     public List<Stack> Stacks { get; } = new();
     public int Tick { get; set; }
@@ -132,18 +163,39 @@ public sealed class GameState
         return best;
     }
 
-    public Stack AddStack(int owner, int tile, int strength)
+    /// <summary>A stack of <paramref name="strength"/> infantry.</summary>
+    public Stack AddStack(int owner, int tile, int strength) =>
+        AddStack(owner, tile, new Dictionary<string, int> { ["infantry"] = strength });
+
+    public Stack AddStack(int owner, int tile, IReadOnlyDictionary<string, int> units)
     {
-        var st = new Stack
+        var st = new Stack { Id = NextStackId++, Owner = owner, Tile = tile };
+        foreach (var kv in units.OrderBy(k => k.Key, StringComparer.Ordinal))
         {
-            Id = NextStackId++,
-            Owner = owner,
-            Tile = tile,
-            Hp = strength * Rules.HpUnit,
-            MaxHp = strength * Rules.HpUnit,
-        };
+            st.Units[kv.Key] = kv.Value;
+            var def = Catalog.Units[kv.Key];
+            long hpPerStrength = Rules.HpUnit * UnitStat(owner, "unit.hp", def, 1000) / 1000;
+            st.MaxHp += kv.Value * (long)def.Strength * hpPerStrength;
+        }
+        st.Hp = st.MaxHp;
         Stacks.Add(st);
         return st;
+    }
+
+    /// <summary>Sum of unit strength weights (nominal, before wounds).</summary>
+    public int NominalStrength(Stack st) => st.Units.Sum(kv => kv.Value * Catalog.Units[kv.Key].Strength);
+
+    /// <summary>
+    /// Resolves a per-unit stat through the "all", id, role and tag selectors in turn, e.g.
+    /// <c>unit.attack.all</c>, <c>unit.attack.armor</c>, <c>unit.attack.heavy</c>.
+    /// </summary>
+    public long UnitStat(int player, string prefix, UnitDef def, long baseValue)
+    {
+        long v = Stat(player, prefix + ".all", baseValue);
+        var seen = new HashSet<string>();   // a unit whose id equals its role must not be modified twice
+        foreach (var sel in new[] { def.Id }.Concat(def.Roles).Concat(def.Tags))
+            if (seen.Add(sel)) v = Stat(player, prefix + "." + sel, v);
+        return v;
     }
 
     public Stack? FindStack(int id) => Stacks.FirstOrDefault(s => s.Id == id);
@@ -171,11 +223,14 @@ public sealed class GameState
         Add(Tick); Add(NextStackId); Add(Winner);
         foreach (int c in CapitalHeld) Add(c);
         foreach (int o in TileOwner) Add(o);
-        foreach (var p in Players) { Add(p.Id); Add(p.Supply); }
+        foreach (var p in Players) { Add(p.Id); Add(p.Supply); Add(p.Energy); Add(p.Influence); Add(p.Starved ? 1 : 0); }
+        for (int t = 0; t < Structure.Length; t++) if (Structure[t] != null) { Add(t); foreach (char ch in Structure[t]!) Add(ch); }
+        foreach (var c in Constructions) { Add(c.Tile); Add(c.Owner); Add(c.StackId); Add(c.TicksLeft); foreach (char ch in c.Structure) Add(ch); }
         foreach (var s in Stacks)
         {
             Add(s.Id); Add(s.Owner); Add(s.Tile); Add(s.Target); Add(s.Timer);
             Add(s.Hp); Add(s.MaxHp); Add(s.Retreating ? 1 : 0); Add(s.StillTicks); Add(s.Entrench);
+            foreach (var u in s.Units) { foreach (char ch in u.Key) Add(ch); Add(u.Value); }
             Add(s.Path.Count);
             foreach (int t in s.Path) Add(t);
         }

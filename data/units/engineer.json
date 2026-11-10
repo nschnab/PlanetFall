@@ -1,0 +1,6 @@
+{
+  "id": "engineer", "name": "Engineer", "domain": "ground", "roles": ["engineer"],
+  "strength": 1, "attack": { "type": "kinetic", "permille": 300 }, "armor": "light",
+  "speedPermille": 900, "vision": 2, "upkeepMilli": 3,
+  "cost": { "alloy": 6000, "energy": 0 }, "captureMultiplier": 0, "tags": ["builder"]
+}

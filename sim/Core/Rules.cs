@@ -17,6 +17,11 @@ public static class Rules
     public const long StackCostMilli = 20_000;      // stat: build.cost.stack (20 alloy)
     public const int CapitulationTicks = 600;       // enemy holds your capital this long (60 s) and you capitulate
     public const int MinorStrength = 8;
+    public const long EnergyDepositMilli = 100;     // stat: yield.energy, per Energy deposit per tick
+    public const long RelicInfluenceMilli = 50;     // stat: yield.influence, per Relic site per tick
+    public const long CapitalEnergyMilli = 30;      // fixed capital bonus per tick
+    public const int UnlinkedPermille = 500;        // tiles cut off from the supply network yield half
+    public const int StarvedAlloyPermille = 500;    // alloy income while upkeep outruns Energy
 
     public const int AttackerPenaltyPermille = 1150; // attackers take 15% more damage than defenders
     public const int FlankBonusPermille = 250;       // +25% damage per extra front a stack is attacked from

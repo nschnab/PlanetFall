@@ -1,0 +1,8 @@
+{
+  "damageTypes": ["kinetic", "explosive"],
+  "armorTypes": ["light", "armored", "fortified"],
+  "matrixPermille": {
+    "kinetic":   { "light": 1000, "armored": 500,  "fortified": 600 },
+    "explosive": { "light": 800,  "armored": 1400, "fortified": 1500 }
+  }
+}

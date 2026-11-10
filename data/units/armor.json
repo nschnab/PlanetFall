@@ -1,0 +1,7 @@
+{
+  "id": "armor", "name": "Armor", "domain": "ground", "roles": ["armor"],
+  "strength": 3, "attack": { "type": "explosive", "permille": 1000 }, "armor": "armored",
+  "speedPermille": 1000, "vision": 2, "upkeepMilli": 8,
+  "cost": { "alloy": 12000, "energy": 0 }, "captureMultiplier": 1000, "tags": ["heavy"],
+  "terrainAttackPermille": { "forest": 700, "highlands": 700 }
+}

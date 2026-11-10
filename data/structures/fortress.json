@@ -1,0 +1,5 @@
+{
+  "id": "fortress", "name": "Fortress",
+  "cost": { "alloy": 30000, "energy": 0 }, "buildTicks": 600,
+  "defencePermille": 300, "armorOverride": "fortified", "onCapture": "destroy"
+}

@@ -12,3 +12,6 @@ public sealed record HopStarted(int StackId, int From, int To) : SimEvent;
 public sealed record HopCompleted(int StackId, int Tile) : SimEvent;
 public sealed record PlayerDefeated(int Player, string Reason) : SimEvent;
 public sealed record MatchOver(int Winner) : SimEvent;
+public sealed record BuildStarted(int Tile, int Owner, string Structure) : SimEvent;
+public sealed record StructureBuilt(int Tile, int Owner, string Structure) : SimEvent;
+public sealed record StructureLost(int Tile, string Structure) : SimEvent;

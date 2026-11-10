@@ -8,4 +8,7 @@
     <LangVersion>12</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\data\**\*.json" LogicalName="data/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>

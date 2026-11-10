@@ -59,6 +59,7 @@ public partial class Match : Node2D
         var map = MapGenerator.Generate(seed);
         _s = GameState.NewWithMinors(map, Rules.MinorStrength, Commander, Commander);
         _s.Players[1].MaxStacks = RivalMaxStacks;
+        _s.Players[0].AutoRecruit = false;      // the player buys units by hand (I/A/G/V/N); the rival still auto-recruits
         _ai = new RivalAi(1);
         _pending.Clear();
         _selected = -1;
@@ -153,6 +154,14 @@ public partial class Match : Node2D
                 case Key.Key3: _speed = 4; break;
                 case Key.Escape: _selected = -1; break;
                 case Key.S: if (_selected != -1) _pending.Add(new StopCommand(0, _selected)); break;
+                case Key.I: _pending.Add(new RecruitCommand(0, "infantry")); break;
+                case Key.A: _pending.Add(new RecruitCommand(0, "armor")); break;
+                case Key.G: _pending.Add(new RecruitCommand(0, "artillery")); break;
+                case Key.V: _pending.Add(new RecruitCommand(0, "recon")); break;
+                case Key.N: _pending.Add(new RecruitCommand(0, "engineer")); break;
+                case Key.Z: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "depot")); break;
+                case Key.X: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "extractor")); break;
+                case Key.C: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "fortress")); break;
                 case Key.R: if (_s.Over) Start((ulong)Random.Shared.NextInt64(1, 1_000_000)); break;
             }
         }
@@ -215,6 +224,12 @@ public partial class Match : Node2D
             DrawPolyline(pts.Append(pts[0]).ToArray(), new Color(0, 0, 0, 0.55f), 1.5f);
 
             var c = Centre(t);
+            if (_s.Structure[t] is { } built)
+            {
+                var box = new Rect2(c + new Vector2(-17, 7), new Vector2(10, 10));
+                DrawRect(box, new Color(0.9f, 0.9f, 0.9f, 0.9f));
+                DrawString(_font, box.Position + new Vector2(1, 9), built[..1].ToUpperInvariant(), HorizontalAlignment.Left, -1, 10, Colors.Black);
+            }
             if (_s.Map.Chokepoint[t])
                 DrawArc(c, 5f, 0f, Mathf.Tau, 12, new Color(1f, 1f, 1f, 0.35f), 1.5f);
             if (_s.Map.Deposit[t])
@@ -308,7 +323,8 @@ public partial class Match : Node2D
         DrawRect(new Rect2(0, 0, 1280, TopBar), new Color(0, 0, 0, 0.6f));
         var me = _s.Players[0];
         int mine = _s.OwnedTiles(0), theirs = _s.OwnedTiles(1);
-        string text = $"Alloy {me.Supply / 1000}   Tiles {mine} v {theirs}   Time {_s.Tick / 600}:{_s.Tick / 10 % 60:00}   " +
+        long upkeep = Simulation.Upkeep(_s, me);
+        string text = $"Alloy {me.Supply / 1000}   Energy {me.Energy / 1000} (-{upkeep / 10f:F1}/s){(me.Starved ? " STARVED" : "")}   Influence {me.Influence / 1000}   Tiles {mine} v {theirs}   Time {_s.Tick / 600}:{_s.Tick / 10 % 60:00}   " +
                       $"{(_paused ? "PAUSED" : $"x{_speed}")}   Seed {_seed}";
         DrawString(_font, new Vector2(14, 26), text, HorizontalAlignment.Left, -1, 17, Colors.White);
 
@@ -326,7 +342,7 @@ public partial class Match : Node2D
 
         Button(new Rect2(1180, 6, 90, 28), "Surrender", () => _pending.Add(new SurrenderCommand(0)));
         DrawString(_font, new Vector2(14, 712),
-            "L-click: select/cycle, then L/R-click tile to move (Shift = queue)   S stop   Space pause   1/2/3 speed   Esc deselect",
+            "L-click select, L/R-click tile to move (Shift = queue)  S stop  Space pause  1/2/3 speed  |  Buy: I infantry A armor G artillery V recon N engineer  |  Engineer: Z depot X extractor C fortress",
             HorizontalAlignment.Left, -1, 13, new Color(1, 1, 1, 0.55f));
     }
 

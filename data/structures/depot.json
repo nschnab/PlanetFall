@@ -1,0 +1,5 @@
+{
+  "id": "depot", "name": "Depot",
+  "cost": { "alloy": 25000, "energy": 0 }, "buildTicks": 400,
+  "supplyRadius": 2, "spawnSite": true, "onCapture": "keep"
+}

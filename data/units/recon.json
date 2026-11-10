@@ -1,0 +1,6 @@
+{
+  "id": "recon", "name": "Recon", "domain": "ground", "roles": ["recon"],
+  "strength": 1, "attack": { "type": "kinetic", "permille": 600 }, "armor": "light",
+  "speedPermille": 1500, "vision": 4, "upkeepMilli": 3,
+  "cost": { "alloy": 4000, "energy": 0 }, "captureMultiplier": 1000, "tags": []
+}

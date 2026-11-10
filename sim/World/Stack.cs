@@ -13,6 +13,9 @@ public sealed class Stack
     public long Timer { get; set; }
 
     public List<int> Path { get; } = new();
+    /// <summary>Unit ids to counts; sorted so iteration (and the hash) is deterministic.</summary>
+    public SortedDictionary<string, int> Units { get; } = new(StringComparer.Ordinal);
+
     public long Hp { get; set; }
     public long MaxHp { get; set; }
     public bool Retreating { get; set; }

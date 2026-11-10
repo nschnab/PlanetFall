@@ -1,0 +1,6 @@
+{
+  "id": "infantry", "name": "Infantry", "domain": "ground", "roles": ["infantry"],
+  "strength": 1, "attack": { "type": "kinetic", "permille": 1000 }, "armor": "light",
+  "speedPermille": 1000, "vision": 2, "upkeepMilli": 2,
+  "cost": { "alloy": 4000, "energy": 0 }, "captureMultiplier": 1500, "tags": []
+}

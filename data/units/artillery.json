@@ -1,0 +1,7 @@
+{
+  "id": "artillery", "name": "Artillery", "domain": "ground", "roles": ["artillery"],
+  "strength": 2, "attack": { "type": "explosive", "permille": 1300 }, "armor": "light",
+  "speedPermille": 800, "vision": 2, "upkeepMilli": 6,
+  "cost": { "alloy": 9000, "energy": 0 }, "captureMultiplier": 0, "tags": ["support"],
+  "engagedAttackPermille": 400
+}

@@ -11,3 +11,9 @@ public sealed record StopCommand(int Player, int StackId) : Command(Player);
 
 /// <summary>Give up. The other major receives every tile and the match ends.</summary>
 public sealed record SurrenderCommand(int Player) : Command(Player);
+
+/// <summary>Buy one unit of a type; it appears as a fresh stack on a spawn site (capital, owned mine or depot).</summary>
+public sealed record RecruitCommand(int Player, string UnitId, int Tile = -1) : Command(Player);
+
+/// <summary>Order a stack that includes an engineer to build a structure on the tile it stands on.</summary>
+public sealed record BuildCommand(int Player, int StackId, string StructureId) : Command(Player);

@@ -1,0 +1,5 @@
+{
+  "id": "extractor", "name": "Extractor",
+  "cost": { "alloy": 15000, "energy": 0 }, "buildTicks": 300,
+  "requiresDeposit": true, "depositYieldPermille": 2000, "onCapture": "keep"
+}

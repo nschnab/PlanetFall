@@ -178,11 +178,13 @@ public class SimulationTests
     public void DepositsPayFiveTimesAsMuch()
     {
         var s = NewGame();
-        int dep = Array.IndexOf(s.Map.Deposit, true);
-        s.TileOwner[dep] = 0;
+        int dep = Enumerable.Range(0, s.Map.TileCount).First(t => s.Map.DepositKinds[t] == DepositKind.Alloy);
+        foreach (int t in Pathfinder.Find(s.Map.Neighbors, s.Players[0].Capital, dep)) s.TileOwner[t] = 0;   // supplied: owned all the way home
         long before = s.Players[0].Supply;
-        Simulation.Step(s, None);
-        Assert.Equal(Rules.TileYieldMilli * (1 + Rules.DepositMultiplier), s.Players[0].Supply - before);
+        Simulation.Step(s, None);   // encirclement may add a pocket of tiles, so count ownership after the step
+        int owned = s.OwnedTiles(0);
+        int alloyDeposits = Enumerable.Range(0, s.Map.TileCount).Count(t => s.TileOwner[t] == 0 && s.Map.DepositKinds[t] == DepositKind.Alloy);
+        Assert.Equal(Rules.TileYieldMilli * (owned + (Rules.DepositMultiplier - 1) * alloyDeposits), s.Players[0].Supply - before);
     }
 
     [Fact]

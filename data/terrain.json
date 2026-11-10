@@ -1,0 +1,7 @@
+{
+  "plains":    { "alloyPermille": 1000, "energyMilli": 0, "defencePermille": 0 },
+  "forest":    { "alloyPermille": 1000, "energyMilli": 6, "defencePermille": 100 },
+  "highlands": { "alloyPermille": 1000, "energyMilli": 0, "defencePermille": 200 },
+  "mountains": { "alloyPermille": 0,    "energyMilli": 0, "defencePermille": 0 },
+  "water":     { "alloyPermille": 0,    "energyMilli": 0, "defencePermille": 0 }
+}
