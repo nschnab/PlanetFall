@@ -338,16 +338,19 @@ public static class Simulation
 
     // ---- merging --------------------------------------------------------------------------
 
+    /// <summary>A stack with a build under way stays put and keeps its identity, so it never merges.</summary>
+    private static bool Building(GameState s, Stack st) => s.Constructions.Any(c => c.StackId == st.Id);
+
     private static void Merge(GameState s, List<SimEvent> events)
     {
         for (int i = 0; i < s.Stacks.Count; i++)
         {
             var a = s.Stacks[i];
-            if (!a.Idle) continue;
+            if (!a.Idle || Building(s, a)) continue;
             for (int j = i + 1; j < s.Stacks.Count; j++)
             {
                 var b = s.Stacks[j];
-                if (!b.Idle || b.Owner != a.Owner || b.Tile != a.Tile) continue;
+                if (!b.Idle || b.Owner != a.Owner || b.Tile != a.Tile || Building(s, b)) continue;
                 a.Hp += b.Hp;
                 a.MaxHp += b.MaxHp;
                 foreach (var u in b.Units) a.Units[u.Key] = a.Units.GetValueOrDefault(u.Key) + u.Value;
@@ -531,35 +534,42 @@ public static class Simulation
         return total;
     }
 
+    /// <summary>Per-tick alloy, energy and influence a player earns right now (before starvation); also what the AI plans with.</summary>
+    public static (long Alloy, long Energy, long Influence) Income(GameState s, Player p)
+    {
+        var linked = SupplyLinked(s, p);
+        long alloy = 0, energy = 0, influence = 0;
+        for (int t = 0; t < s.TileOwner.Length; t++)
+        {
+            if (s.TileOwner[t] != p.Id) continue;
+            var td = s.Catalog.Terrain[s.Map.Terrain[t]];
+            long a = s.Stat(p.Id, Rules.StatYield, Rules.TileYieldMilli * td.AlloyPermille / 1000);
+            long e = td.EnergyMilli > 0 ? s.Stat(p.Id, "yield.energy", td.EnergyMilli) : 0;
+            long i = 0;
+            int boost = BuiltStructure(s, t)?.DepositYieldPermille ?? 1000;
+            switch (s.Map.DepositKinds[t])
+            {
+                case DepositKind.Alloy: a = a * Rules.DepositMultiplier * boost / 1000; break;
+                case DepositKind.Energy: e += s.Stat(p.Id, "yield.energy", Rules.EnergyDepositMilli) * boost / 1000; break;
+                case DepositKind.Relic: i += s.Stat(p.Id, "yield.influence", Rules.RelicInfluenceMilli) * boost / 1000; break;
+            }
+            if (!linked[t])
+            {
+                a = a * Rules.UnlinkedPermille / 1000;
+                e = e * Rules.UnlinkedPermille / 1000;
+                i = i * Rules.UnlinkedPermille / 1000;
+            }
+            alloy += a; energy += e; influence += i;
+        }
+        if (s.TileOwner[p.Capital] == p.Id) energy += s.Stat(p.Id, "yield.energy", Rules.CapitalEnergyMilli);
+        return (alloy, energy, influence);
+    }
+
     private static void Economy(GameState s, List<SimEvent> events)
     {
         foreach (var p in s.Majors)
         {
-            var linked = SupplyLinked(s, p);
-            long alloy = 0, energy = 0, influence = 0;
-            for (int t = 0; t < s.TileOwner.Length; t++)
-            {
-                if (s.TileOwner[t] != p.Id) continue;
-                var td = s.Catalog.Terrain[s.Map.Terrain[t]];
-                long a = s.Stat(p.Id, Rules.StatYield, Rules.TileYieldMilli * td.AlloyPermille / 1000);
-                long e = td.EnergyMilli > 0 ? s.Stat(p.Id, "yield.energy", td.EnergyMilli) : 0;
-                long i = 0;
-                int boost = BuiltStructure(s, t)?.DepositYieldPermille ?? 1000;
-                switch (s.Map.DepositKinds[t])
-                {
-                    case DepositKind.Alloy: a = a * Rules.DepositMultiplier * boost / 1000; break;
-                    case DepositKind.Energy: e += s.Stat(p.Id, "yield.energy", Rules.EnergyDepositMilli) * boost / 1000; break;
-                    case DepositKind.Relic: i += s.Stat(p.Id, "yield.influence", Rules.RelicInfluenceMilli) * boost / 1000; break;
-                }
-                if (!linked[t])
-                {
-                    a = a * Rules.UnlinkedPermille / 1000;
-                    e = e * Rules.UnlinkedPermille / 1000;
-                    i = i * Rules.UnlinkedPermille / 1000;
-                }
-                alloy += a; energy += e; influence += i;
-            }
-            if (s.TileOwner[p.Capital] == p.Id) energy += s.Stat(p.Id, "yield.energy", Rules.CapitalEnergyMilli);
+            var (alloy, energy, influence) = Income(s, p);
 
             p.Energy += energy - Upkeep(s, p);
             p.Starved = p.Energy < 0;
@@ -581,7 +591,7 @@ public static class Simulation
 
     // ---- recruiting and building ----------------------------------------------------------
 
-    private static long UnitCost(GameState s, int player, UnitDef def, long baseCost)
+    public static long UnitCost(GameState s, int player, UnitDef def, long baseCost)
     {
         long v = s.Stat(player, "build.cost.all", baseCost);
         var seen = new HashSet<string> { def.Id };

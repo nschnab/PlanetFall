@@ -11,7 +11,7 @@ env:
 jobs:
   sim-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -20,6 +20,8 @@ jobs:
       - run: dotnet test sim.tests --configuration Release
       - name: Map generator sweep (M3 done-test)
         run: dotnet run -c Release --project tools/mapgen-sweep -- 1000 1 20 10
+      - name: AI balance run (M5 done-test, 120 of the 500 matches)
+        run: dotnet run -c Release --project tools/balance-runner -- 120 1 240
 
   godot:
     runs-on: ubuntu-latest

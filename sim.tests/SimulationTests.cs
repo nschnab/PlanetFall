@@ -36,16 +36,18 @@ public class SimulationTests
         return (a, s.Map.Neighbors[a][0]);
     }
 
+    private static readonly int Hop = Rules.HopDelayMs / Rules.TickMs;
+
     [Fact]
-    public void HopTakesThreeSeconds()
+    public void HopTakesTheBaseDelay()
     {
         var s = NewGame();
         var (a, b) = NeighbourPair(s);
         var st = s.Stacks[0];
         Simulation.Step(s, new Command[] { new MoveCommand(0, st.Id, b) });
-        Run(s, 28);                       // 29 ticks so far
+        Run(s, Hop - 2);                  // Hop-1 ticks so far
         Assert.Equal(a, st.Tile);
-        Run(s, 1);                        // 30th tick
+        Run(s, 1);                        // the Hop-th tick
         Assert.Equal(b, st.Tile);
     }
 
@@ -56,9 +58,10 @@ public class SimulationTests
         var (a, b) = NeighbourPair(s);
         var st = s.Stacks[0];
         Simulation.Step(s, new Command[] { new MoveCommand(0, st.Id, b) });
-        Run(s, 18);                       // 19 ticks
+        int fast = (Hop * 2 + 2) / 3;     // Hop / 1.5, rounded up
+        Run(s, fast - 2);
         Assert.Equal(a, st.Tile);
-        Run(s, 1);                        // 20 ticks = 30 / 1.5
+        Run(s, 1);
         Assert.Equal(b, st.Tile);
     }
 
@@ -70,7 +73,7 @@ public class SimulationTests
         var st = s.Stacks[0];
         Assert.Equal(-1, s.TileOwner[b]);
         Simulation.Step(s, new Command[] { new MoveCommand(0, st.Id, b) });
-        Run(s, 28);
+        Run(s, Hop - 2);
         Assert.Equal(-1, s.TileOwner[b]);
         Run(s, 1);
         Assert.Equal(0, s.TileOwner[b]);
@@ -196,7 +199,7 @@ public class SimulationTests
         var st = s.Stacks[0];
         Simulation.Step(s, new Command[] { new MoveCommand(0, st.Id, b) });
         Simulation.Step(s, new Command[] { new MoveCommand(0, st.Id, c, Queue: true) });
-        Run(s, 28 + 30);                         // first hop done at tick 30, second at tick 60
+        Run(s, Hop * 2 - 2);                     // first hop done at tick Hop, second at 2 x Hop
         Assert.Equal(c, st.Tile);
         Assert.Equal(0, s.TileOwner[b]);
         Assert.Equal(0, s.TileOwner[c]);

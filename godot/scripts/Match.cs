@@ -32,7 +32,8 @@ public partial class Match : Node2D
         Leader.Parse("""{ "id": "commander", "name": "Field Commander" }""");
 
     /// <summary>Difficulty knob: most stacks the rival may field at once.</summary>
-    private const int RivalMaxStacks = 4;
+    private bool _debug;
+    private string _endReason = "";
 
     private GameState _s = null!;
     private RivalAi _ai = null!;
@@ -56,11 +57,12 @@ public partial class Match : Node2D
     private void Start(ulong seed)
     {
         _seed = seed;
-        var map = MapGenerator.Generate(seed);
+        var map = MapGenerator.Generate(seed, AiMatch.StandardCols, AiMatch.StandardRows);   // the Standard ~700-tile map the AI is tuned on
         _s = GameState.NewWithMinors(map, Rules.MinorStrength, Commander, Commander);
-        _s.Players[1].MaxStacks = RivalMaxStacks;
-        _s.Players[0].AutoRecruit = false;      // the player buys units by hand (I/A/G/V/N); the rival still auto-recruits
-        _ai = new RivalAi(1);
+        _s.Players[0].AutoRecruit = false;      // the player buys units by hand (I/A/G/V/N)
+        _s.Players[1].AutoRecruit = false;      // the rival buys its own mixed army through RecruitCommands
+        _ai = new RivalAi(1, Personality.ForSeed(seed, 1));
+        _endReason = "";
         _pending.Clear();
         _selected = -1;
         _acc = 0;
@@ -82,7 +84,8 @@ public partial class Match : Node2D
                 var cmds = new List<Command>(_pending);
                 _pending.Clear();
                 cmds.AddRange(_ai.Think(_s));
-                Simulation.Step(_s, cmds);
+                foreach (var ev in Simulation.Step(_s, cmds))
+                    if (ev is PlayerDefeated d) _endReason = d.Reason;
             }
         }
         if (_selected != -1 && _s.FindStack(_selected) == null) _selected = -1;
@@ -162,6 +165,7 @@ public partial class Match : Node2D
                 case Key.Z: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "depot")); break;
                 case Key.X: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "extractor")); break;
                 case Key.C: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "fortress")); break;
+                case Key.F3: _debug = !_debug; break;
                 case Key.R: if (_s.Over) Start((ulong)Random.Shared.NextInt64(1, 1_000_000)); break;
             }
         }
@@ -180,7 +184,33 @@ public partial class Match : Node2D
         DrawRoutes();
         DrawStacks();
         DrawHud();
+        if (_debug) DrawDebug();
         if (_s.Over) DrawGameOver();
+    }
+
+    /// <summary>F3: what the rival is thinking (goal scores, hopelessness, what each of its stacks was told to do).</summary>
+    private void DrawDebug()
+    {
+        var d = _ai.Debug;
+        var lines = new List<string>
+        {
+            $"RIVAL  {_ai.Personality.Name}   goal {d.Goal}",
+            $"expand {d.Scores[0]}  develop {d.Scores[1]}  defend {d.Scores[2]}  attack {d.Scores[3]}",
+            $"hopelessness {d.Hopelessness}/{_ai.Personality.PainThreshold}  ({d.HopelessReason})" +
+                (d.SurrenderInTicks >= 0 ? $"  surrender in {d.SurrenderInTicks / 10}s" : ""),
+        };
+        DrawRect(new Rect2(8, TopBar + 6, 520, 20 + lines.Count * 18), new Color(0, 0, 0, 0.65f));
+        for (int i = 0; i < lines.Count; i++)
+            DrawString(_font, new Vector2(16, TopBar + 24 + i * 18), lines[i], HorizontalAlignment.Left, -1, 14, Colors.White);
+
+        foreach (var st in _s.Stacks.Where(x => x.Owner == 1))
+        {
+            var o = _ai.OrderOf(st.Id);
+            if (o == null) continue;
+            var c = Centre(st.Tile);
+            DrawString(_font, c + new Vector2(-14, -16), o.Role.ToString(), HorizontalAlignment.Left, -1, 11, new Color(1f, 0.9f, 0.4f));
+            if (o.Tile >= 0 && o.Tile != st.Tile) DrawLine(c, Centre(o.Tile), new Color(1f, 0.9f, 0.4f, 0.45f), 1.5f);
+        }
     }
 
     private Vector2[] Poly(int tile)
@@ -342,7 +372,7 @@ public partial class Match : Node2D
 
         Button(new Rect2(1180, 6, 90, 28), "Surrender", () => _pending.Add(new SurrenderCommand(0)));
         DrawString(_font, new Vector2(14, 712),
-            "L-click select, L/R-click tile to move (Shift = queue)  S stop  Space pause  1/2/3 speed  |  Buy: I infantry A armor G artillery V recon N engineer  |  Engineer: Z depot X extractor C fortress",
+            "L-click select, L/R-click tile to move (Shift = queue)  S stop  Space pause  1/2/3 speed  F3 AI debug  |  Buy: I infantry A armor G artillery V recon N engineer  |  Engineer: Z depot X extractor C fortress",
             HorizontalAlignment.Left, -1, 13, new Color(1, 1, 1, 0.55f));
     }
 
@@ -358,6 +388,13 @@ public partial class Match : Node2D
     {
         DrawRect(new Rect2(0, 0, 1280, 720), new Color(0, 0, 0, 0.6f));
         string msg = _s.Winner == 0 ? "VICTORY" : "DEFEAT";
+        string how = _endReason switch
+        {
+            "surrender" => _s.Winner == 0 ? "The rival surrendered." : "You surrendered.",
+            "capital held" => _s.Winner == 0 ? "Their capital fell." : "Your capital fell.",
+            _ => "",
+        };
+        if (how != "") DrawString(_font, new Vector2(0, 440), how, HorizontalAlignment.Center, 1280, 22, Colors.White);
         DrawString(_font, new Vector2(0, 340), msg, HorizontalAlignment.Center, 1280, 64,
             _s.Winner == 0 ? new Color(0.5f, 1f, 0.5f) : new Color(1f, 0.45f, 0.4f));
         DrawString(_font, new Vector2(0, 390), $"{_s.Tick / 600}:{_s.Tick / 10 % 60:00} played.  Press R for a new map.", HorizontalAlignment.Center, 1280, 22,

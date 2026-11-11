@@ -5,7 +5,7 @@ public static class Rules
 {
     public const int TickMs = 100;                  // 10 Hz
     public const int RiverCrossPermille = 1500;     // a hop across a river edge takes 50% longer
-    public const int HopDelayMs = 3000;             // stat: move.delay
+    public const int HopDelayMs = 8000;             // stat: move.delay
     public const int SpeedPermille = 1000;          // stat: move.speed (timer rate)
     public const int BattleSlowPermille = 400;      // hop rate while in a fight, entering or leaving
     public const int DamagePerStrPerTickMilli = 12; // 0.12 hp per strength per second
