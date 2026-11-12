@@ -71,6 +71,29 @@ public sealed class GameState
     /// <summary>True when the two nations are at war, so their stacks fight and their land can be taken.</summary>
     public bool AtWar(int a, int b) => a != b && Diplomacy.Get(a, b) == Treaty.War;
 
+    private readonly Dictionary<int, Fog> _fogs = new();
+
+    /// <summary>Fog of war is tracked only for players asked for (the humans); AI-only matches pay nothing.</summary>
+    public IReadOnlyDictionary<int, Fog> Fogs => _fogs;
+
+    public Fog TrackFog(int player)
+    {
+        if (!_fogs.TryGetValue(player, out var f))
+        {
+            f = new Fog(player, Map.TileCount);
+            _fogs[player] = f;
+            f.Update(this);
+        }
+        return f;
+    }
+
+    public const int FogEveryTicks = 5;
+
+    public void UpdateFogs()
+    {
+        foreach (var f in _fogs.Values.OrderBy(f => f.Player)) f.Update(this);
+    }
+
     public List<Stack> Stacks { get; } = new();
     public int Tick { get; set; }
     public int NextStackId { get; set; } = 1;
@@ -258,6 +281,11 @@ public sealed class GameState
             foreach (var u in s.Units) { foreach (char ch in u.Key) Add(ch); Add(u.Value); }
             Add(s.Path.Count);
             foreach (int t in s.Path) Add(t);
+        }
+        foreach (var f in _fogs.Values.OrderBy(f => f.Player))
+        {
+            Add(f.Player);
+            for (int i = 0; i < f.Tiles.Length; i++) { Add((long)f.Tiles[i]); Add(f.LastOwner[i]); }
         }
         return h;
     }

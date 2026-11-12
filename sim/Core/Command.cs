@@ -1,8 +1,21 @@
+using System.Text.Json.Serialization;
 using Planetfall.Sim.World;
 
 namespace Planetfall.Sim.Core;
 
 /// <summary>Every input to the sim, human or AI, is a Command. The command log is the replay.</summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(MoveCommand), "move")]
+[JsonDerivedType(typeof(StopCommand), "stop")]
+[JsonDerivedType(typeof(SurrenderCommand), "surrender")]
+[JsonDerivedType(typeof(RecruitCommand), "recruit")]
+[JsonDerivedType(typeof(BuildCommand), "build")]
+[JsonDerivedType(typeof(GiftCommand), "gift")]
+[JsonDerivedType(typeof(ProposeTreatyCommand), "propose")]
+[JsonDerivedType(typeof(BreakTreatyCommand), "break")]
+[JsonDerivedType(typeof(DeclareWarCommand), "war")]
+[JsonDerivedType(typeof(IntegrateCommand), "integrate")]
+[JsonDerivedType(typeof(DemandSurrenderCommand), "demand")]
 public abstract record Command(int Player);
 
 /// <summary>Order a stack to a tile. Queue=true appends the route after its current one (Shift).</summary>

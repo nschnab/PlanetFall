@@ -28,6 +28,7 @@ public static class Simulation
         DiplomacySystem.Tick(s, events);
         Victory(s, events, surrendered);
         s.Tick++;
+        if (s.Tick % GameState.FogEveryTicks == 0) s.UpdateFogs();
         return events;
     }
 
