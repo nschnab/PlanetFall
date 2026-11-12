@@ -46,6 +46,10 @@ jobs:
         run: |
           timeout 60 godot --headless --path godot --quit-after 3 2>&1 | tee smoke.txt
           grep -q "Planetfall sim " smoke.txt
+      - name: Save/load self-test
+        run: |
+          PLANETFALL_AUTOSTART=42 PLANETFALL_SELFTEST=1 PLANETFALL_SPEED=40 timeout 120 godot --headless --path godot 2>&1 | tee selftest.txt
+          grep -q "selftest save/load OK" selftest.txt
       - name: Export Windows
         run: |
           mkdir -p build/windows

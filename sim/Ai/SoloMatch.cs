@@ -66,7 +66,7 @@ public sealed class SoloMatch
         new(SaveVersion, MapData.GeneratorVersion, Seed, Cols, Rows, State.Tick, State.Hash(), new List<LoggedCommand>(_log));
 
     /// <summary>Rebuilds the match by replaying the log. Throws <see cref="SaveException"/> if the save does not fit this build.</summary>
-    public static SoloMatch Load(SaveGame save)
+    public static SoloMatch Load(SaveGame save, Action<int, int>? progress = null)
     {
         if (save.Version != SaveVersion) throw new SaveException($"Save version {save.Version} is not supported (this build reads {SaveVersion}).");
         if (save.GeneratorVersion != MapData.GeneratorVersion) throw new SaveException("This save was made with a different map generator.");
@@ -78,6 +78,7 @@ public sealed class SoloMatch
             var now = new List<Command>();
             while (next < save.Commands.Count && save.Commands[next].Tick == m.State.Tick) now.Add(save.Commands[next++].Command);
             m.Step(now);
+            if (progress != null && m.State.Tick % 200 == 0) progress(m.State.Tick, save.Tick);
         }
         if (m.State.Hash() != save.Hash) throw new SaveException("The save no longer replays to the same state (the game was updated since it was made).");
         return m;

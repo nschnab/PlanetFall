@@ -1,48 +1,42 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Godot;
 using Planetfall.Sim.Ai;
 using Planetfall.Sim.Core;
-using Planetfall.Sim.Data;
-using Planetfall.Sim.MapGen;
 using Planetfall.Sim.Systems;
 using Planetfall.Sim.World;
 
 namespace Planetfall;
 
 /// <summary>
-/// The playable slice. Draws the sim state and turns clicks into Commands; it never mutates the
-/// state itself. Player 0 is the human, player 1 is the RivalAi.
+/// The playable slice. Draws the sim state and turns clicks into Commands; it never mutates the state itself.
+/// Player 0 is the human, player 1 is the RivalAi. Split over several files: input and flow here,
+/// <c>MatchDraw</c> for the map and HUD, <c>MatchMenus</c> for menus, settings and saves, <c>MatchDiplomacy</c> for the panel.
 /// </summary>
 public partial class Match : Node2D
 {
-    private const float MapScale = 0.94f;
-    private const float TopBar = 40f;
-    private static readonly Vector2 MapOffset = new((1280f - 1280f * MapScale) / 2f, TopBar);
+    private const float W = 1280f, H = 720f, TopBar = 40f;
+    private const int AutosaveEveryTicks = 3000;      // five minutes
+    private const int AutosaveSlots = 3;
 
-    private static readonly Color[] OwnerColor =
-    {
-        new(0.20f, 0.45f, 0.85f), new(0.80f, 0.25f, 0.25f), new(0.85f, 0.65f, 0.15f),
-    };
-    private static Color ColorOf(int owner) => OwnerColor[Math.Min(owner, OwnerColor.Length - 1)];
-    private static readonly Color Neutral = new(0.24f, 0.26f, 0.30f);
+    private enum Screen { Menu, Playing, Loading }
 
-    private static readonly Leader Commander =
-        Leader.Parse("""{ "id": "commander", "name": "Field Commander" }""");
+    private Screen _screen = Screen.Menu;
+    private SoloMatch _m = null!;
+    private GameState _s => _m.State;
+    private RivalAi _ai => _m.Ai;
 
-    /// <summary>Difficulty knob: most stacks the rival may field at once.</summary>
     private bool _debug;
     private string _endReason = "";
-
     private bool _dipOpen;
     private int _dipSel = -1;
     private readonly List<string> _log = new();
     private string _toast = "";
     private int _toastUntil;
 
-    private GameState _s = null!;
-    private RivalAi _ai = null!;
     private readonly List<Command> _pending = new();
     private double _acc;
     private bool _paused;
@@ -53,113 +47,203 @@ public partial class Match : Node2D
     private Font _font = null!;
     private readonly List<(Rect2 rect, Action act)> _buttons = new();
 
+    private Bindings _keys = new();
+    private Vector2 _lastMouse;
+    private bool _dragPan;
+    private readonly List<int>[] _groups = Enumerable.Range(0, 10).Select(_ => new List<int>()).ToArray();
+    private int _lastGroup = -1;
+    private ulong _lastGroupTapMs;
+    private int _nextAutosave = AutosaveEveryTicks;
+    private int _autosaveRing;
+
     public override void _Ready()
     {
         _font = ThemeDB.FallbackFont;
-        Start((ulong)Random.Shared.NextInt64(1, 1_000_000));
-        GD.Print($"Planetfall sim match started: seed {_seed}, {_s.Map.TileCount} tiles");   // CI smoke test greps "Planetfall sim "
+        LoadBindings();
+        _seedText = "";
+        string auto = System.Environment.GetEnvironmentVariable("PLANETFALL_AUTOSTART") ?? "";
+        if (DisplayServer.GetName() == "headless" || auto != "")      // CI smoke test and scripted runs skip the menu
+        {
+            NewMatch(ulong.TryParse(auto, out var fixedSeed) && fixedSeed > 1 ? fixedSeed : (ulong)Random.Shared.NextInt64(1, 1_000_000));
+            if (System.Environment.GetEnvironmentVariable("PLANETFALL_SELFTEST") == "1") _selfTest = 1;
+            if (int.TryParse(System.Environment.GetEnvironmentVariable("PLANETFALL_SPEED"), out int sp)) _speed = Math.Clamp(sp, 1, 40);
+            GD.Print($"Planetfall sim match started: seed {_seed}, {_s.Map.TileCount} tiles");   // CI greps "Planetfall sim "
+        }
+        else GD.Print("Planetfall sim menu ready");
     }
 
-    private void Start(ulong seed)
+    private void NewMatch(ulong seed) => BeginMatch(new SoloMatch(seed));
+
+    private void BeginMatch(SoloMatch m)
     {
-        _seed = seed;
-        var map = MapGenerator.Generate(seed, AiMatch.StandardCols, AiMatch.StandardRows);   // the Standard ~700-tile map the AI is tuned on
-        _s = GameState.NewWithMinors(map, Rules.MinorStrength, Commander, Commander);
-        _s.Players[0].AutoRecruit = false;      // the player buys units by hand (I/A/G/V/N)
-        _s.Players[1].AutoRecruit = false;      // the rival buys its own mixed army through RecruitCommands
-        _ai = new RivalAi(1, Personality.ForSeed(seed, 1));
-        _s.Players[1].PersonalityId = _ai.Personality.Id;
+        _m = m;
+        _seed = m.Seed;
+        _screen = Screen.Playing;
         _endReason = "";
         _dipSel = -1;
+        _dipOpen = false;
+        _menuOpen = false;
+        _settingsOpen = false;
         _log.Clear();
         _toast = "";
         _pending.Clear();
         _selected = -1;
+        foreach (var g in _groups) g.Clear();
         _acc = 0;
         _paused = false;
         _speed = 1;
+        _alerts.Clear();
+        _engaged.Clear();
+        _seenEnemy.Clear();
+        _nextAutosave = (m.State.Tick / AutosaveEveryTicks + 1) * AutosaveEveryTicks;
+        _zoom = 1f;
+        CentreOn(m.State.Players[0].Capital);
     }
 
     // ---- loop -----------------------------------------------------------------------------
 
+    // Scripted check of the real save/load path inside Godot (PLANETFALL_SELFTEST=1): save at 1 minute, reload, compare hashes.
+    private int _selfTest;          // 0 off/idle, 1 waiting to save, 2 waiting for load
+    private ulong _selfTestHash;
+
+    private void SelfTestStep()
+    {
+        if (_selfTest == 1 && _screen == Screen.Playing && _s.Tick >= 600)
+        {
+            _paused = true;
+            QuickSave();
+            _selfTestHash = _s.Hash();
+            _selfTest = 2;
+            QuickLoad();
+        }
+        else if (_selfTest == 2 && _screen == Screen.Playing && _loadTask == null && _m.State.Tick >= 600 && _paused == false)
+        {
+            GD.Print(_s.Hash() == _selfTestHash ? "Planetfall selftest save/load OK" : "Planetfall selftest save/load FAIL");
+            GetTree().Quit();
+        }
+        else if (_selfTest == 2 && _screen == Screen.Menu)
+        {
+            GD.Print("Planetfall selftest save/load FAIL: " + _menuNote);
+            GetTree().Quit();
+        }
+    }
+
     public override void _Process(double delta)
     {
-        if (!_paused && !_s.Over)
+        PollLoad();
+        if (_selfTest != 0) SelfTestStep();
+        if (_screen == Screen.Playing)
         {
-            _acc += delta * _speed;
-            int steps = 0;
-            while (_acc >= Rules.TickMs / 1000.0 && steps++ < 30 && !_s.Over)
+            bool frozen = _paused || _menuOpen || _settingsOpen;
+            if (!frozen && !_s.Over)
             {
-                _acc -= Rules.TickMs / 1000.0;
-                var cmds = new List<Command>(_pending);
-                _pending.Clear();
-                cmds.AddRange(_ai.Think(_s));
-                foreach (var ev in Simulation.Step(_s, cmds)) OnEvent(ev);
+                _acc += delta * _speed;
+                int steps = 0;
+                while (_acc >= Rules.TickMs / 1000.0 && steps++ < 30 && !_s.Over)
+                {
+                    _acc -= Rules.TickMs / 1000.0;
+                    var cmds = _pending.ToList();
+                    _pending.Clear();
+                    foreach (var ev in _m.Step(cmds)) OnEvent(ev);
+                    ScanAlerts();
+                    if (_s.Tick >= _nextAutosave) { Autosave(); _nextAutosave += AutosaveEveryTicks; }
+                }
             }
+            PanWithKeys(delta);
+            if (_selected != -1 && _s.FindStack(_selected) == null) _selected = -1;
         }
-        if (_selected != -1 && _s.FindStack(_selected) == null) _selected = -1;
         QueueRedraw();
     }
 
-    // ---- diplomacy log --------------------------------------------------------------------
-
-    private string NameOf(int p) => _s.Players[p].Leader.Name;
-
-    private static string TreatyName(Treaty t) => t switch
+    private void PanWithKeys(double delta)
     {
-        Treaty.War => "War", Treaty.Neutral => "Neutral", Treaty.NonAggression => "Non-Aggression",
-        Treaty.TradePact => "Trade Pact", _ => "Alliance",
-    };
-
-    private static string ShortTreaty(Treaty t) => t switch
-    {
-        Treaty.Neutral => "Peace", Treaty.NonAggression => "Non-Agg.", Treaty.TradePact => "Trade", _ => "Alliance",
-    };
-
-    private void Note(string msg)
-    {
-        _log.Add($"{_s.Tick / 600}:{_s.Tick / 10 % 60:00}  {msg}");
-        if (_log.Count > 60) _log.RemoveAt(0);
-        _toast = msg;
-        _toastUntil = _s.Tick + 90;
+        if (_settingsOpen || _menuOpen) return;
+        Vector2 d = Vector2.Zero;
+        if (Held("pan_left")) d.X -= 1;
+        if (Held("pan_right")) d.X += 1;
+        if (Held("pan_up")) d.Y -= 1;
+        if (Held("pan_down")) d.Y += 1;
+        if (d == Vector2.Zero) return;
+        float speed = 700f / PxPerUnit;       // screen pixels per second, in map units
+        _camX += d.X * speed * (float)delta;
+        _camY += d.Y * speed * (float)delta;
+        ClampCam();
     }
 
-    private void OnEvent(SimEvent ev)
+    private bool Held(string action)
     {
-        switch (ev)
-        {
-            case PlayerDefeated d: _endReason = d.Reason; break;
-            case ProposalAnswered a when a.From == 0: Note($"{NameOf(a.To)} on {TreatyName(a.Treaty)}: {a.Reason}"); break;
-            case SurrenderAnswered a when a.To == 0: Note($"{NameOf(a.From)}: {a.Reason}"); break;
-            case TreatyChanged c when c.A == 0 || c.B == 0: Note($"{NameOf(c.A == 0 ? c.B : c.A)}: now {TreatyName(c.New)}"); break;
-            case Treacherous t: Note(t.Player == 0 ? "You are now TREACHEROUS: everyone trusts you less, and no treaties for 5 minutes." : $"{NameOf(t.Player)} broke a pact and is Treacherous."); break;
-            case TaskPosted p when p.Kind == "gift": Note($"{NameOf(p.Minor)} asks for a gift of {DiplomacySystem.TaskGiftAlloy} alloy."); break;
-            case RaidLaunched r: Note($"{NameOf(r.Minor)} sends raiders at {(r.Target == 0 ? "you" : NameOf(r.Target))}."); break;
-            case TaskCompleted c when c.Player == 0: Note($"{NameOf(c.Minor)} is grateful."); break;
-            case IntegrationStarted i when i.Player == 0: Note($"Integrating {NameOf(i.Minor)}: 60 s."); break;
-            case IntegrationCancelled i when i.Player == 0: Note($"Integration of {NameOf(i.Minor)} fell through: {i.Reason}."); break;
-            case MinorIntegrated i when i.Player == 0: Note($"{NameOf(i.Minor)} has joined you."); break;
-        }
+        var key = OS.FindKeycodeFromString(_keys.KeyOf(action));
+        return key != Key.None && Input.IsKeyPressed(key);
     }
 
-    // ---- input ----------------------------------------------------------------------------
+    // ---- camera ---------------------------------------------------------------------------
 
-    private Vector2 ToMap(Vector2 screen) => (screen - MapOffset) / MapScale;
-    private Vector2 ToScreen(float x, float y) => new Vector2(x, y) * MapScale + MapOffset;
+    private float _zoom = 1f, _camX, _camY;
+    private const float MaxZoom = 5f;
+
+    /// <summary>Screen pixels per map unit.</summary>
+    private float PxPerUnit => Math.Min(W / _s.Map.Width, (H - TopBar - 6) / _s.Map.Height) * _zoom;
+    private float ViewCentreY => TopBar + (H - TopBar) / 2f;
+    private bool Wraps => W / PxPerUnit < _s.Map.Width - 0.5f;
+
+    private Vector2 ToScreen(float x, float y) => new((x - _camX) * PxPerUnit + W / 2f, (y - _camY) * PxPerUnit + ViewCentreY);
+
+    private Vector2 ToMap(Vector2 screen)
+    {
+        float x = (screen.X - W / 2f) / PxPerUnit + _camX;
+        float wd = _s.Map.Width;
+        x = ((x % wd) + wd) % wd;
+        return new Vector2(x, (screen.Y - ViewCentreY) / PxPerUnit + _camY);
+    }
+
+    private void ClampCam()
+    {
+        float halfH = (H - TopBar) / 2f / PxPerUnit;
+        _camY = halfH * 2 >= _s.Map.Height ? _s.Map.Height / 2f : Mathf.Clamp(_camY, halfH, _s.Map.Height - halfH);
+        float wd = _s.Map.Width;
+        _camX = Wraps ? ((_camX % wd) + wd) % wd : wd / 2f;
+    }
+
+    private void CentreOn(int tile)
+    {
+        _camX = _s.Map.CentroidX[tile] / (float)Planetfall.Sim.MapGen.MapData.Scale;
+        _camY = _s.Map.CentroidY[tile] / (float)Planetfall.Sim.MapGen.MapData.Scale;
+        ClampCam();
+    }
+
+    private void ZoomAt(Vector2 screen, float factor)
+    {
+        var before = ToMap(screen);
+        _zoom = Mathf.Clamp(_zoom * factor, 1f, MaxZoom);
+        // keep the map point under the cursor fixed (taking the nearest wrapped copy)
+        var after = ToMap(screen);
+        float dx = before.X - after.X;
+        float wd = _s.Map.Width;
+        if (dx > wd / 2) dx -= wd; else if (dx < -wd / 2) dx += wd;
+        _camX += dx;
+        _camY += before.Y - after.Y;
+        ClampCam();
+    }
+
+    // ---- picking --------------------------------------------------------------------------
 
     private Vector2 Centre(int tile) =>
-        ToScreen(_s.Map.CentroidX[tile] / (float)MapData.Scale, _s.Map.CentroidY[tile] / (float)MapData.Scale);
+        ToScreen(_s.Map.CentroidX[tile] / (float)Planetfall.Sim.MapGen.MapData.Scale, _s.Map.CentroidY[tile] / (float)Planetfall.Sim.MapGen.MapData.Scale);
 
     private int TileAt(Vector2 screen)
     {
+        if (screen.Y < TopBar) return -1;
         var p = ToMap(screen);
-        if (p.X < 0 || p.Y < 0 || p.X > _s.Map.Width || p.Y > _s.Map.Height) return -1;
+        if (p.Y < 0 || p.Y > _s.Map.Height) return -1;
         int best = -1;
         float bestD = float.MaxValue;
+        float wd = _s.Map.Width;
         for (int t = 0; t < _s.Map.TileCount; t++)
         {
-            var c = new Vector2(_s.Map.CentroidX[t], _s.Map.CentroidY[t]) / MapData.Scale;
-            float d = c.DistanceSquaredTo(p);
+            float dx = Math.Abs(_s.Map.CentroidX[t] / (float)Planetfall.Sim.MapGen.MapData.Scale - p.X);
+            dx = Math.Min(dx, wd - dx);
+            float dy = _s.Map.CentroidY[t] / (float)Planetfall.Sim.MapGen.MapData.Scale - p.Y;
+            float d = dx * dx + dy * dy;
             if (d < bestD) { bestD = d; best = t; }
         }
         return best;
@@ -168,14 +252,51 @@ public partial class Match : Node2D
     private List<Stack> MyStacksOn(int tile) =>
         _s.Stacks.Where(x => x.Owner == 0 && x.Tile == tile).OrderBy(x => x.Id).ToList();
 
+    // ---- input ----------------------------------------------------------------------------
+
     public override void _UnhandledInput(InputEvent e)
     {
-        if (e is InputEventMouseMotion mm) { _hover = TileAt(mm.Position); return; }
+        if (_screen == Screen.Loading) return;
+        if (e is InputEventMouseMotion mmv) _lastMouse = mmv.Position;
+        if (e is InputEventMouseButton mbp) _lastMouse = mbp.Position;
 
-        if (e is InputEventMouseButton mb && mb.Pressed)
+        if (e is InputEventKey kk && kk.Pressed && !kk.Echo && _rebinding != "") { CaptureRebind(kk); return; }
+
+        if (_screen == Screen.Menu)
         {
-            foreach (var (rect, act) in _buttons)
-                if (rect.HasPoint(mb.Position)) { act(); return; }
+            if (e is InputEventMouseButton m0 && m0.Pressed && m0.ButtonIndex == MouseButton.Left) ClickButtons(m0.Position);
+            else if (e is InputEventKey mk && mk.Pressed && !mk.Echo) MenuKey(mk);
+            return;
+        }
+
+        if (e is InputEventMouseMotion mm)
+        {
+            if (_dragPan && !_menuOpen && !_settingsOpen)
+            {
+                _camX -= mm.Relative.X / PxPerUnit;
+                _camY -= mm.Relative.Y / PxPerUnit;
+                ClampCam();
+            }
+            _hover = TileAt(mm.Position);
+            return;
+        }
+        if (e is InputEventMagnifyGesture mg && !_menuOpen && !_settingsOpen) { ZoomAt(mg.Position, mg.Factor); return; }
+        if (e is InputEventPanGesture pg && !_menuOpen && !_settingsOpen)
+        {
+            _camX += pg.Delta.X * 6f / PxPerUnit;
+            _camY += pg.Delta.Y * 6f / PxPerUnit;
+            ClampCam();
+            return;
+        }
+
+        if (e is InputEventMouseButton mb)
+        {
+            if (mb.ButtonIndex == MouseButton.Middle) { _dragPan = mb.Pressed; return; }
+            if (!mb.Pressed) return;
+            if (_menuOpen || _settingsOpen) { ClickButtons(mb.Position); return; }
+            if (mb.ButtonIndex == MouseButton.WheelUp) { ZoomAt(mb.Position, 1.15f); return; }
+            if (mb.ButtonIndex == MouseButton.WheelDown) { ZoomAt(mb.Position, 1f / 1.15f); return; }
+            if (ClickButtons(mb.Position)) return;
             if (_s.Over) return;
 
             int tile = TileAt(mb.Position);
@@ -199,355 +320,96 @@ public partial class Match : Node2D
         }
         else if (e is InputEventKey k && k.Pressed && !k.Echo)
         {
-            switch (k.Keycode)
-            {
-                case Key.Space: _paused = !_paused; break;
-                case Key.Key1: _speed = 1; break;
-                case Key.Key2: _speed = 2; break;
-                case Key.Key3: _speed = 4; break;
-                case Key.Escape: _selected = -1; break;
-                case Key.S: if (_selected != -1) _pending.Add(new StopCommand(0, _selected)); break;
-                case Key.I: _pending.Add(new RecruitCommand(0, "infantry")); break;
-                case Key.A: _pending.Add(new RecruitCommand(0, "armor")); break;
-                case Key.G: _pending.Add(new RecruitCommand(0, "artillery")); break;
-                case Key.V: _pending.Add(new RecruitCommand(0, "recon")); break;
-                case Key.N: _pending.Add(new RecruitCommand(0, "engineer")); break;
-                case Key.Z: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "depot")); break;
-                case Key.X: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "extractor")); break;
-                case Key.C: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "fortress")); break;
-                case Key.F3: _debug = !_debug; break;
-                case Key.D: _dipOpen = !_dipOpen; break;
-                case Key.R: if (_s.Over) Start((ulong)Random.Shared.NextInt64(1, 1_000_000)); break;
-            }
+            OnKey(k);
         }
+    }
+
+    /// <summary>Topmost button under the point wins (the last one drawn).</summary>
+    private bool ClickButtons(Vector2 pos)
+    {
+        for (int i = _buttons.Count - 1; i >= 0; i--)
+            if (_buttons[i].rect.HasPoint(pos)) { _buttons[i].act(); return true; }
+        return false;
+    }
+
+    private void OnKey(InputEventKey k)
+    {
+        // Control groups: Ctrl/Cmd+digit stores the selection, digit recalls it, a second tap centres on it.
+        if (k.Keycode >= Key.Key1 && k.Keycode <= Key.Key9 && !_menuOpen && !_settingsOpen)
+        {
+            int g = (int)(k.Keycode - Key.Key1) + 1;
+            if (k.IsCommandOrControlPressed())
+            {
+                _groups[g].Clear();
+                if (_selected != -1) _groups[g].Add(_selected);
+                Note($"Group {g}: {_groups[g].Count} stack(s)");
+            }
+            else RecallGroup(g);
+            return;
+        }
+
+        if (k.Keycode == Key.R && _s.Over && !_menuOpen && !_settingsOpen) { NewMatch((ulong)Random.Shared.NextInt64(1, 1_000_000)); return; }
+
+        string name = OS.GetKeycodeString(k.Keycode);
+        var action = _keys.ActionOf(name);
+        if (action == null) return;
+
+        if (action == "menu") { ToggleMenu(); return; }
+        if (action == "clear")
+        {
+            if (_settingsOpen) _settingsOpen = false;
+            else if (_menuOpen) _menuOpen = false;
+            else if (_dipOpen) _dipOpen = false;
+            else if (_selected != -1) _selected = -1;
+            else ToggleMenu();
+            return;
+        }
+        if (_menuOpen || _settingsOpen) return;
+
+        switch (action)
+        {
+            case "pause": _paused = !_paused; break;
+            case "slower": _speed = _speed >= 4 ? 2 : 1; break;
+            case "faster": _speed = _speed <= 1 ? 2 : 4; break;
+            case "stop": if (_selected != -1) _pending.Add(new StopCommand(0, _selected)); break;
+            case "idle": CycleIdle(); break;
+            case "recruit_infantry": _pending.Add(new RecruitCommand(0, "infantry")); break;
+            case "recruit_armor": _pending.Add(new RecruitCommand(0, "armor")); break;
+            case "recruit_artillery": _pending.Add(new RecruitCommand(0, "artillery")); break;
+            case "recruit_recon": _pending.Add(new RecruitCommand(0, "recon")); break;
+            case "recruit_engineer": _pending.Add(new RecruitCommand(0, "engineer")); break;
+            case "build_depot": if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "depot")); break;
+            case "build_extractor": if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "extractor")); break;
+            case "build_fortress": if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "fortress")); break;
+            case "diplomacy": _dipOpen = !_dipOpen; break;
+            case "debug": _debug = !_debug; break;
+            case "home": CentreOn(_s.Players[0].Capital); break;
+            case "save": QuickSave(); break;
+            case "load": QuickLoad(); break;
+        }
+    }
+
+    private void RecallGroup(int g)
+    {
+        var alive = _groups[g].Where(id => _s.FindStack(id) != null).ToList();
+        _groups[g] = alive;
+        if (alive.Count == 0) return;
+        ulong now = Time.GetTicksMsec();
+        _selected = alive[0];
+        if (_lastGroup == g && now - _lastGroupTapMs < 400) CentreOn(_s.FindStack(_selected)!.Tile);
+        _lastGroup = g;
+        _lastGroupTapMs = now;
+    }
+
+    private void CycleIdle()
+    {
+        var idle = _s.Stacks.Where(x => x.Owner == 0 && x.Idle).OrderBy(x => x.Id).ToList();
+        if (idle.Count == 0) { Note("No idle stacks."); return; }
+        int idx = idle.FindIndex(x => x.Id == _selected);
+        var pick = idle[(idx + 1) % idle.Count];
+        _selected = pick.Id;
+        CentreOn(pick.Tile);
     }
 
     private void IssueMove(int tile, bool queue) => _pending.Add(new MoveCommand(0, _selected, tile, queue));
-
-    // ---- drawing --------------------------------------------------------------------------
-
-    public override void _Draw()
-    {
-        _buttons.Clear();
-        DrawRect(new Rect2(0, 0, 1280, 720), new Color(0.07f, 0.08f, 0.10f));
-        DrawTiles();
-        DrawRivers();
-        DrawRoutes();
-        DrawStacks();
-        DrawHud();
-        if (_debug) DrawDebug();
-        if (_dipOpen) DrawDiplomacy();
-        else if (_s.Tick < _toastUntil) DrawString(_font, new Vector2(14, 64), _toast, HorizontalAlignment.Left, 1000, 15, new Color(1f, 0.95f, 0.6f));
-        if (_s.Over) DrawGameOver();
-    }
-
-    /// <summary>F3: what the rival is thinking (goal scores, hopelessness, what each of its stacks was told to do).</summary>
-    private void DrawDebug()
-    {
-        var d = _ai.Debug;
-        var lines = new List<string>
-        {
-            $"RIVAL  {_ai.Personality.Name}   goal {d.Goal}",
-            $"expand {d.Scores[0]}  develop {d.Scores[1]}  defend {d.Scores[2]}  attack {d.Scores[3]}",
-            $"hopelessness {d.Hopelessness}/{_ai.Personality.PainThreshold}  ({d.HopelessReason})" +
-                (d.SurrenderInTicks >= 0 ? $"  surrender in {d.SurrenderInTicks / 10}s" : ""),
-        };
-        DrawRect(new Rect2(8, TopBar + 6, 520, 20 + lines.Count * 18), new Color(0, 0, 0, 0.65f));
-        for (int i = 0; i < lines.Count; i++)
-            DrawString(_font, new Vector2(16, TopBar + 24 + i * 18), lines[i], HorizontalAlignment.Left, -1, 14, Colors.White);
-
-        foreach (var st in _s.Stacks.Where(x => x.Owner == 1))
-        {
-            var o = _ai.OrderOf(st.Id);
-            if (o == null) continue;
-            var c = Centre(st.Tile);
-            DrawString(_font, c + new Vector2(-14, -16), o.Role.ToString(), HorizontalAlignment.Left, -1, 11, new Color(1f, 0.9f, 0.4f));
-            if (o.Tile >= 0 && o.Tile != st.Tile) DrawLine(c, Centre(o.Tile), new Color(1f, 0.9f, 0.4f, 0.45f), 1.5f);
-        }
-    }
-
-    private Vector2[] Poly(int tile)
-    {
-        var raw = _s.Map.Polygon[tile];
-        var pts = new Vector2[raw.Length / 2];
-        for (int i = 0; i < pts.Length; i++)
-            pts[i] = ToScreen(raw[i * 2] / (float)MapData.Scale, raw[i * 2 + 1] / (float)MapData.Scale);
-        return pts;
-    }
-
-    private void DrawRivers()
-    {
-        var blue = new Color(0.30f, 0.60f, 0.95f, 0.9f);
-        foreach (long key in _s.Map.Rivers)
-        {
-            int a = (int)(key / 100_000), b = (int)(key % 100_000);
-            var pa = Poly(a);
-            var pb = Poly(b);
-            var shared = pa.Where(v => pb.Any(w => v.DistanceTo(w) < 2f)).ToList();
-            if (shared.Count >= 2) DrawLine(shared[0], shared[1], blue, 3f);
-        }
-    }
-
-    private void DrawTiles()
-    {
-        for (int t = 0; t < _s.Map.TileCount; t++)
-        {
-            int o = _s.TileOwner[t];
-            var fill = o == -1 ? Neutral : ColorOf(o).Darkened(0.35f);
-            switch (_s.Map.Terrain[t])
-            {
-                case Terrain.Water: fill = new Color(0.07f, 0.16f, 0.30f); break;
-                case Terrain.Mountains: fill = new Color(0.30f, 0.30f, 0.32f); break;
-                case Terrain.Forest when o == -1: fill = fill.Lerp(new Color(0.10f, 0.28f, 0.14f), 0.5f); break;
-                case Terrain.Highlands when o == -1: fill = fill.Lerp(new Color(0.40f, 0.34f, 0.22f), 0.5f); break;
-            }
-            if (t == _hover) fill = fill.Lightened(0.12f);
-            var pts = Poly(t);
-            DrawColoredPolygon(pts, fill);
-            DrawPolyline(pts.Append(pts[0]).ToArray(), new Color(0, 0, 0, 0.55f), 1.5f);
-
-            var c = Centre(t);
-            if (_s.Structure[t] is { } built)
-            {
-                var box = new Rect2(c + new Vector2(-17, 7), new Vector2(10, 10));
-                DrawRect(box, new Color(0.9f, 0.9f, 0.9f, 0.9f));
-                DrawString(_font, box.Position + new Vector2(1, 9), built[..1].ToUpperInvariant(), HorizontalAlignment.Left, -1, 10, Colors.Black);
-            }
-            if (_s.Map.Chokepoint[t])
-                DrawArc(c, 5f, 0f, Mathf.Tau, 12, new Color(1f, 1f, 1f, 0.35f), 1.5f);
-            if (_s.Map.Deposit[t])
-            {
-                DrawColoredPolygon(new[] { c + new Vector2(0, -9), c + new Vector2(8, 0), c + new Vector2(0, 9), c + new Vector2(-8, 0) },
-                    _s.Map.DepositKinds[t] switch
-                    {
-                        DepositKind.Energy => new Color(0.35f, 0.90f, 1f, 0.9f),
-                        DepositKind.Relic => new Color(0.85f, 0.45f, 1f, 0.9f),
-                        _ => new Color(1f, 0.85f, 0.25f, 0.9f),
-                    });
-            }
-        }
-        foreach (var p in _s.Players)
-        {
-            var c = Centre(p.Capital);
-            DrawArc(c, 20, 0, Mathf.Tau, 24, ColorOf(p.Id).Lightened(0.4f), 2.5f);
-        }
-    }
-
-    private void DrawRoutes()
-    {
-        foreach (var st in _s.Stacks)
-        {
-            if (st.Owner != 0 && st.Target == -1) continue;
-            var col = ColorOf(st.Owner).Lightened(0.5f);
-            var from = Centre(st.Tile);
-            if (st.Target != -1)
-            {
-                DrawArrow(from, Centre(st.Target), col, 3f);
-                from = Centre(st.Target);
-            }
-            if (st.Owner != 0) continue;
-            foreach (int t in st.Path)
-            {
-                var to = Centre(t);
-                DrawDashedLine(from, to, col with { A = 0.6f }, 2f, 6f);
-                from = to;
-            }
-        }
-    }
-
-    private void DrawArrow(Vector2 a, Vector2 b, Color col, float w)
-    {
-        // The map wraps east-west: across the seam, draw the arrow leaving one edge and entering the other.
-        float span = 1280f * MapScale;
-        if (Math.Abs(a.X - b.X) > span / 2)
-        {
-            float shift = a.X < b.X ? -span : span;
-            DrawLine(a, b + new Vector2(shift, 0), col, w);
-            DrawArrow(a - new Vector2(shift, 0), b, col, w);
-            return;
-        }
-        DrawLine(a, b, col, w);
-        var dir = (b - a).Normalized();
-        var side = new Vector2(-dir.Y, dir.X);
-        DrawColoredPolygon(new[] { b, b - dir * 12 + side * 6, b - dir * 12 - side * 6 }, col);
-    }
-
-    private void DrawStacks()
-    {
-        var byTile = _s.Stacks.GroupBy(x => x.Tile);
-        foreach (var g in byTile)
-        {
-            var list = g.OrderBy(x => x.Id).ToList();
-            for (int i = 0; i < list.Count; i++)
-            {
-                var st = list[i];
-                var pos = Centre(st.Tile) + new Vector2((i - (list.Count - 1) / 2f) * 26f, 0);
-                bool sel = st.Id == _selected;
-                float r = 11 + Math.Min(st.EffectiveStrength, 20) * 0.35f;
-                DrawCircle(pos, r, ColorOf(st.Owner));
-                DrawArc(pos, r, 0, Mathf.Tau, 24, sel ? Colors.White : Colors.Black, sel ? 3f : 1.5f);
-                if (st.Target != -1)
-                {
-                    long need = Simulation.HopNeeded(_s, st);
-                    float frac = Mathf.Clamp(st.Timer / (float)need, 0f, 1f);
-                    DrawArc(pos, r + 5, -Mathf.Pi / 2, -Mathf.Pi / 2 + Mathf.Tau * frac, 24, Colors.White, 2.5f);
-                }
-                if (st.Entrench > 0)
-                    DrawString(_font, pos + new Vector2(-14, r + 14), $"+{st.Entrench / 10}% def", HorizontalAlignment.Left, -1, 11, new Color(0.7f, 1f, 0.7f));
-                var txt = st.EffectiveStrength.ToString();
-                var sz = _font.GetStringSize(txt, HorizontalAlignment.Left, -1, 14);
-                DrawString(_font, pos + new Vector2(-sz.X / 2, 5), txt, HorizontalAlignment.Left, -1, 14, Colors.White);
-            }
-        }
-    }
-
-    private void DrawHud()
-    {
-        DrawRect(new Rect2(0, 0, 1280, TopBar), new Color(0, 0, 0, 0.6f));
-        var me = _s.Players[0];
-        int mine = _s.OwnedTiles(0), theirs = _s.OwnedTiles(1);
-        long upkeep = Simulation.Upkeep(_s, me);
-        string text = $"Alloy {me.Supply / 1000}   Energy {me.Energy / 1000} (-{upkeep / 10f:F1}/s){(me.Starved ? " STARVED" : "")}   Influence {me.Influence / 1000}   Tiles {mine} v {theirs}   Time {_s.Tick / 600}:{_s.Tick / 10 % 60:00}   " +
-                      $"{(_paused ? "PAUSED" : $"x{_speed}")}   Seed {_seed}";
-        DrawString(_font, new Vector2(14, 26), text, HorizontalAlignment.Left, -1, 17, Colors.White);
-
-        // Capital pressure
-        for (int p = 0; p < 2; p++)
-        {
-            int held = _s.CapitalHeld[p];
-            if (held <= 0) continue;
-            float left = (Rules.CapitulationTicks - held) / 10f;
-            string who = p == 0 ? "YOUR capital is held" : "Enemy capital held";
-            DrawString(_font, new Vector2(640, 26 + p * 0), $"{who}: {left:F0}s to capitulation", HorizontalAlignment.Left, -1, 17,
-                p == 0 ? new Color(1f, 0.5f, 0.4f) : new Color(0.5f, 1f, 0.5f));
-            break;
-        }
-
-        Button(new Rect2(1180, 6, 90, 28), "Surrender", () => _pending.Add(new SurrenderCommand(0)));
-        Button(new Rect2(1060, 6, 110, 28), _dipOpen ? "Close (D)" : "Diplomacy (D)", () => _dipOpen = !_dipOpen, new Color(0.12f, 0.2f, 0.3f));
-        DrawString(_font, new Vector2(14, 712),
-            "L-click select, L/R-click tile to move (Shift = queue)  S stop  Space pause  1/2/3 speed  F3 AI debug  D diplomacy  |  Buy: I infantry A armor G artillery V recon N engineer  |  Engineer: Z depot X extractor C fortress",
-            HorizontalAlignment.Left, -1, 13, new Color(1, 1, 1, 0.55f));
-    }
-
-
-    // ---- diplomacy panel ------------------------------------------------------------------
-
-    private void DrawDiplomacy()
-    {
-        const float x = 700, w = 570, rowH = 26;
-        var dip = _s.Diplomacy;
-        var me = _s.Players[0];
-        var dist = new int[_s.Map.TileCount];
-        Array.Fill(dist, int.MaxValue);
-        var q = new Queue<int>();
-        dist[me.Capital] = 0;
-        q.Enqueue(me.Capital);
-        while (q.Count > 0)
-        {
-            int c = q.Dequeue();
-            foreach (int n in _s.Map.Neighbors[c]) if (dist[n] == int.MaxValue) { dist[n] = dist[c] + 1; q.Enqueue(n); }
-        }
-        var others = new List<int> { 1 };
-        others.AddRange(_s.Players.Where(p => p.Minor && dip.IntegratedInto[p.Id] == -1).OrderBy(p => dist[p.Capital]).ThenBy(p => p.Id).Select(p => p.Id));
-        if (_dipSel == -1 || !others.Contains(_dipSel)) _dipSel = others[0];
-
-        float top = TopBar + 8;
-        float height = 24 + others.Count * rowH + 4 + 20 + 6 * 17 + 20 + 6 * 17 + 10;
-        DrawRect(new Rect2(x, top, w, height), new Color(0.04f, 0.05f, 0.08f, 0.94f));
-        DrawRect(new Rect2(x, top, w, height), new Color(1, 1, 1, 0.3f), false, 1f);
-        DrawString(_font, new Vector2(x + 10, top + 17), $"DIPLOMACY   Influence {me.Influence / 1000}   Alloy {me.Supply / 1000}" +
-            (dip.TreatyCooldownUntil[0] > _s.Tick ? $"   (no treaties for {(dip.TreatyCooldownUntil[0] - _s.Tick) / 10}s)" : ""),
-            HorizontalAlignment.Left, -1, 14, Colors.White);
-
-        float y = top + 24;
-        foreach (int id in others)
-        {
-            var p = _s.Players[id];
-            var treaty = dip.Get(0, id);
-            int op = DiplomacySystem.Opinion(_s, id, 0);
-            bool minor = p.Minor;
-            string mood = minor ? DiplomacySystem.MoodOf(_s, id, 0).ToString() : "Rival";
-            if (id == _dipSel) DrawRect(new Rect2(x + 4, y, w - 8, rowH - 2), new Color(1, 1, 1, 0.10f));
-            int pick = id;
-            _buttons.Add((new Rect2(x + 4, y, 320, rowH - 2), () => _dipSel = pick));
-            string label = minor ? $"{NameOf(id)} (hop {dist[p.Capital]})" : $"RIVAL  {_ai.Personality.Name}";
-            DrawString(_font, new Vector2(x + 10, y + 17), $"{label}  {mood}  {TreatyName(treaty)}  op {op:+#;-#;0}", HorizontalAlignment.Left, 320, 12, ColorOf(id).Lightened(0.5f));
-
-            int bx = (int)(x + w - 240);
-            Button(new Rect2(bx, y, 62, rowH - 3), "Gift 15", () => _pending.Add(new GiftCommand(0, pick, 15)), new Color(0.15f, 0.3f, 0.2f), 12);
-            if (treaty < Treaty.Alliance)
-            {
-                var next = treaty + 1;
-                long cost = DiplomacySystem.TreatyInfluence[(int)next] / 1000;
-                Button(new Rect2(bx + 66, y, 104, rowH - 3), $"{ShortTreaty(next)}{(cost > 0 ? $" {cost}i" : "")}",
-                    () => _pending.Add(new ProposeTreatyCommand(0, pick, next)), new Color(0.12f, 0.2f, 0.3f), 12);
-            }
-            else if (minor && !dip.Integrations.Any(i => i.Minor == id))
-                Button(new Rect2(bx + 66, y, 104, rowH - 3), $"Integrate {DiplomacySystem.IntegrateInfluence / 1000}i", () => _pending.Add(new IntegrateCommand(0, pick)), new Color(0.2f, 0.25f, 0.1f), 12);
-            else if (minor)
-            {
-                var it = dip.Integrations.First(i => i.Minor == id);
-                DrawString(_font, new Vector2(bx + 70, y + 17), $"joining {it.TicksLeft / 10}s", HorizontalAlignment.Left, -1, 12, new Color(0.8f, 1f, 0.6f));
-            }
-            if (treaty >= Treaty.NonAggression)
-                Button(new Rect2(bx + 174, y, 62, rowH - 3), "Break", () => _pending.Add(new BreakTreatyCommand(0, pick)), null, 12);
-            else if (treaty != Treaty.War)
-                Button(new Rect2(bx + 174, y, 62, rowH - 3), "War", () => _pending.Add(new DeclareWarCommand(0, pick)), null, 12);
-            else if (!minor)
-                Button(new Rect2(bx + 174, y, 62, rowH - 3), "Demand", () => _pending.Add(new DemandSurrenderCommand(0, pick)), new Color(0.35f, 0.2f, 0.05f), 12);
-            y += rowH;
-        }
-
-        // Why they feel the way they do.
-        y += 4;
-        var lines = new List<OpinionLine>();
-        int total = DiplomacySystem.Opinion(_s, _dipSel, 0, lines);
-        var tr = dip.Get(0, _dipSel);
-        string need = tr < Treaty.Alliance ? $"{ShortTreaty(tr + 1)} needs opinion {DiplomacySystem.TreatyNeed[(int)tr + 1]}" : $"integration needs {DiplomacySystem.IntegrateOpinion}";
-        DrawString(_font, new Vector2(x + 10, y + 14), $"{NameOf(_dipSel)} thinks of you: {total:+#;-#;0}   ({need})", HorizontalAlignment.Left, -1, 13, Colors.White);
-        y += 20;
-        for (int i = 0; i < 6; i++)
-        {
-            if (i < lines.Count)
-                DrawString(_font, new Vector2(x + 20, y + 13), $"{lines[i].Points:+#;-#;0}  {lines[i].Label}", HorizontalAlignment.Left, -1, 12, lines[i].Points >= 0 ? new Color(0.6f, 1f, 0.6f) : new Color(1f, 0.6f, 0.6f));
-            y += 17;
-        }
-        var task = dip.Tasks.FirstOrDefault(tk => tk.Minor == _dipSel && (tk.Player == -1 || tk.Player == 0));
-        if (task != null)
-            DrawString(_font, new Vector2(x + 10, y + 13), task.Kind == "gift" ? $"Task: give {task.Amount / 1000} alloy (+{task.Reward} opinion), {(task.Expires - _s.Tick) / 10}s left"
-                                                         : $"Task: destroy their raiders (+{task.Reward} opinion), {(task.Expires - _s.Tick) / 10}s left",
-                HorizontalAlignment.Left, -1, 12, new Color(1f, 0.9f, 0.5f));
-        y += 20;
-        foreach (var line in _log.TakeLast(6))
-        {
-            DrawString(_font, new Vector2(x + 10, y + 13), line, HorizontalAlignment.Left, w - 20, 12, new Color(1, 1, 1, 0.75f));
-            y += 17;
-        }
-    }
-
-    private void Button(Rect2 r, string label, Action act, Color? fill = null, int size = 15)
-    {
-        DrawRect(r, fill ?? new Color(0.25f, 0.12f, 0.12f));
-        DrawRect(r, new Color(1, 1, 1, 0.4f), false, 1f);
-        DrawString(_font, r.Position + new Vector2(8, r.Size.Y * 0.5f + size * 0.35f), label, HorizontalAlignment.Left, -1, size, Colors.White);
-        _buttons.Add((r, act));
-    }
-
-    private void DrawGameOver()
-    {
-        DrawRect(new Rect2(0, 0, 1280, 720), new Color(0, 0, 0, 0.6f));
-        string msg = _s.Winner == 0 ? "VICTORY" : "DEFEAT";
-        string how = _endReason switch
-        {
-            "surrender" => _s.Winner == 0 ? "The rival surrendered." : "You surrendered.",
-            "capital held" => _s.Winner == 0 ? "Their capital fell." : "Your capital fell.",
-            _ => "",
-        };
-        if (how != "") DrawString(_font, new Vector2(0, 440), how, HorizontalAlignment.Center, 1280, 22, Colors.White);
-        DrawString(_font, new Vector2(0, 340), msg, HorizontalAlignment.Center, 1280, 64,
-            _s.Winner == 0 ? new Color(0.5f, 1f, 0.5f) : new Color(1f, 0.45f, 0.4f));
-        DrawString(_font, new Vector2(0, 390), $"{_s.Tick / 600}:{_s.Tick / 10 % 60:00} played.  Press R for a new map.", HorizontalAlignment.Center, 1280, 22,
-            Colors.White);
-    }
 }
