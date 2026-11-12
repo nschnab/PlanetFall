@@ -20,6 +20,7 @@ public sealed class AiDebug
     public string HopelessReason { get; internal set; } = "";
     public int SurrenderInTicks { get; internal set; } = -1;
     public int Enemy { get; internal set; } = -1;
+    public int Courting { get; internal set; } = -1;
 }
 
 /// <summary>
@@ -37,6 +38,7 @@ public sealed class AiDebug
 public sealed class RivalAi
 {
     public const int StrategicTicks = 50;
+    public const int CourtTicks = 100;
     public const int OperationalTicks = 20;
     public const int TacticalTicks = 10;
     public const int Hysteresis = 100;
@@ -51,6 +53,9 @@ public sealed class RivalAi
     private int _tickNow;
     private int _enemy = -1;
     private int _hopelessSince = -1;
+    private int _courted = -1;
+    private const int MinThreat = 5;               // a stray scout or gun team is not a reason to pin the whole army at home
+    private const long GiftReserve = 70_000;       // never gift below 70 alloy: armies come first
     private bool _surrendered;
 
     public Personality Personality { get; }
@@ -81,6 +86,7 @@ public sealed class RivalAi
         if ((s.Tick + _me * 7) % OperationalTicks == 0) Operate(s, cmds);
         Tactics(s, cmds);
         if ((s.Tick + _me) % TacticalTicks == 0) CheckSurrender(s, cmds);
+        if ((s.Tick + _me * 13) % CourtTicks == 0) Court(s, cmds);
         return cmds;
     }
 
@@ -172,48 +178,8 @@ public sealed class RivalAi
 
     // ---- hopelessness and surrender -------------------------------------------------------
 
-    private static int PainFromShare(long own, long foe)
-    {
-        if (own + foe == 0) return 0;
-        long share = own * 1000 / (own + foe);
-        return (int)Math.Clamp((450 - share) * 1000 / 450, 0, 1000);
-    }
-
-    /// <summary>
-    /// 0..1000: how little this nation can still hope for. Weighs territory, income, army strength and
-    /// above all the state of its capital, so a nation with a live capital and an army stays well below
-    /// every personality's threshold.
-    /// </summary>
-    public int Hopelessness(GameState s, out string reason)
-    {
-        reason = "";
-        int foe = PickStrongest(s);
-        if (foe == -1) return 0;
-        var me = s.Players[_me];
-        int tiles = PainFromShare(s.OwnedTiles(_me), s.OwnedTiles(foe));
-        int income = PainFromShare(Simulation.Income(s, me).Alloy, Simulation.Income(s, s.Players[foe]).Alloy);
-        int army = PainFromShare(PowerOf(s.Stacks.Where(x => x.Owner == _me)), PowerOf(s.Stacks.Where(x => x.Owner == foe)));
-
-        int cap = me.Capital;
-        bool defended = s.Stacks.Any(x => x.Owner == _me && x.Tile == cap);
-        bool besieged = s.Stacks.Any(x => x.Owner != _me && !s.Players[x.Owner].Minor
-            && (x.Tile == cap || x.Target == cap || s.Map.Neighbors[cap].Contains(x.Tile)));
-        int capital = s.TileOwner[cap] != _me ? 1000 : besieged ? (defended ? 600 : 1000) : defended ? 0 : 150;
-
-        int score = (tiles * 3 + income * 2 + army * 2 + capital * 3) / 10;
-        reason = capital >= 600 ? "Our capital is falling"
-            : army >= 700 ? "We have no army left to fight with"
-            : tiles >= 700 ? "We have lost most of our land"
-            : "Our capital still stands";
-        return score;
-    }
-
-    private int PickStrongest(GameState s)
-    {
-        var others = s.Majors.Where(p => p.Id != _me).ToList();
-        if (others.Count == 0) return -1;
-        return others.OrderByDescending(p => s.OwnedTiles(p.Id) + PowerOf(s.Stacks.Where(x => x.Owner == p.Id))).ThenBy(p => p.Id).First().Id;
-    }
+    /// <summary>0..1000: how little this nation can still hope for (see <see cref="Ai.Hopelessness"/>).</summary>
+    public int Hopelessness(GameState s, out string reason) => Ai.Hopelessness.Score(s, _me, out reason);
 
     private void CheckSurrender(GameState s, List<Command> cmds)
     {
@@ -232,6 +198,50 @@ public sealed class RivalAi
         if (left > 0) return;
         _surrendered = true;
         cmds.Add(new SurrenderCommand(_me));
+    }
+
+    // ---- diplomacy ------------------------------------------------------------------------
+
+    /// <summary>
+    /// Court Minor: befriend the nearest native power with gifts, then climb the treaty ladder one step at a time
+    /// and finally integrate it. How hard it tries is the personality's <c>courting</c>; a hunter at war with
+    /// its rival rarely has the patience.
+    /// </summary>
+    private void Court(GameState s, List<Command> cmds)
+    {
+        var me = s.Players[_me];
+        var dip = s.Diplomacy;
+        bool eager = Personality.Courting >= 1000 || Personality.Courting >= 300 && Debug.Goal != AiGoal.Attack;
+        if (!eager || s.Tick < DiplomacySystem.FirstTaskTick) { Debug.Courting = -1; return; }
+
+        if (_courted != -1 && (dip.IntegratedInto[_courted] != -1 || !s.Players[_courted].Minor)) _courted = -1;
+        if (_courted != -1 && s.TileOwner[s.Players[_courted].Capital] != _courted) _courted = -1;   // someone took it
+        if (_courted == -1)
+        {
+            var dist = Bfs(s, new[] { me.Capital });
+            _courted = s.Players.Where(p => p.Minor && dip.IntegratedInto[p.Id] == -1 && s.TileOwner[p.Capital] == p.Id
+                                              && dist[p.Capital] >= 0 && dist[p.Capital] <= 12 && dip.Get(_me, p.Id) != Treaty.Alliance)
+                .OrderBy(p => dist[p.Capital]).ThenBy(p => p.Id).Select(p => p.Id).DefaultIfEmpty(-1).First();
+        }
+        Debug.Courting = _courted;
+        if (_courted == -1) return;
+
+        var treaty = dip.Get(_me, _courted);
+        int opinion = DiplomacySystem.Opinion(s, _courted, _me);
+        if (treaty == Treaty.Alliance)
+        {
+            if (opinion >= DiplomacySystem.IntegrateOpinion && me.Influence >= DiplomacySystem.IntegrateInfluence && !dip.Integrations.Any(i => i.Minor == _courted))
+                cmds.Add(new IntegrateCommand(_me, _courted));
+            else if (opinion < DiplomacySystem.IntegrateOpinion && me.Supply >= GiftReserve)
+                cmds.Add(new GiftCommand(_me, _courted, DiplomacySystem.TaskGiftAlloy));
+            return;
+        }
+        var next = treaty + 1;
+        if (opinion >= DiplomacySystem.TreatyNeed[(int)next] && dip.RefusedUntil[dip.Pair(_me, _courted)] <= s.Tick
+            && me.Influence >= DiplomacySystem.TreatyInfluence[(int)next] && dip.TreatyCooldownUntil[_me] <= s.Tick)
+            cmds.Add(new ProposeTreatyCommand(_me, _courted, next));
+        else if (me.Supply >= GiftReserve && opinion < DiplomacySystem.TreatyNeed[(int)next] + 10)
+            cmds.Add(new GiftCommand(_me, _courted, DiplomacySystem.TaskGiftAlloy));
     }
 
     // ---- operational ----------------------------------------------------------------------
@@ -416,7 +426,7 @@ public sealed class RivalAi
         int cap = me.Capital;
         var foes = s.Stacks.Where(x => x.Owner == _enemy).ToList();
         var capDist = Bfs(s, new[] { cap }, 5);
-        var threats = foes.Where(x => capDist[x.Tile] >= 0 || s.TileOwner[x.Tile] == _me).OrderBy(x => capDist[x.Tile] < 0 ? 99 : capDist[x.Tile]).ThenBy(x => x.Id).ToList();
+        var threats = foes.Where(x => x.EffectiveStrength >= MinThreat && (capDist[x.Tile] >= 0 || s.TileOwner[x.Tile] == _me)).OrderBy(x => capDist[x.Tile] < 0 ? 99 : capDist[x.Tile]).ThenBy(x => x.Id).ToList();
         bool pressed = threats.Count > 0 || Debug.Goal == AiGoal.Defend;
         int garrisonNeed = pressed ? Math.Max(3, Personality.Muster / 2) : 0;
         int garrison = 0;
@@ -503,6 +513,7 @@ public sealed class RivalAi
             if (Defenders(s, t) * 1000L > st.EffectiveStrength * (long)Personality.RiskPermille) continue;
 
             int owner = s.TileOwner[t];
+            if (owner != -1 && !s.AtWar(_me, owner)) continue;       // a partner's land is off limits
             int value = owner == -1 ? (attack ? 2 : 5) : (attack ? 5 : 2);
             value += s.Map.DepositKinds[t] switch
             {
@@ -524,7 +535,7 @@ public sealed class RivalAi
     {
         int total = 0;
         foreach (var o in s.Stacks)
-            if (o.Owner != _me && (o.Tile == tile || o.Target == tile)) total += o.EffectiveStrength;
+            if (s.AtWar(o.Owner, _me) && (o.Tile == tile || o.Target == tile)) total += o.EffectiveStrength;
         return total;
     }
 
@@ -542,7 +553,7 @@ public sealed class RivalAi
             // 1. Retreat-if-losing: outnumbered two to one away from home.
             if (engaged && st.Tile != cap && !st.Retreating)
             {
-                int foe = s.Stacks.Where(o => Simulation.Fighting(st, o)).Sum(o => o.EffectiveStrength);
+                int foe = s.Stacks.Where(o => Simulation.Fighting(s, st, o)).Sum(o => o.EffectiveStrength);
                 if (foe * 1000L > st.EffectiveStrength * 2000L)
                 {
                     cmds.Add(new MoveCommand(_me, st.Id, cap));

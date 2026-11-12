@@ -29,6 +29,9 @@ public sealed class Player
     /// <summary>Minor powers hold ground and never expand, buy stacks, or count for victory.</summary>
     public bool Minor { get; init; }
 
+    /// <summary>Personality id when an AI commands this nation (null for a human); diplomacy answers in character.</summary>
+    public string? PersonalityId { get; set; }
+
     /// <summary>Most stacks this player may field at once; recruiting pauses at the cap.</summary>
     public int MaxStacks { get; set; } = int.MaxValue;
 }
@@ -59,6 +62,14 @@ public sealed class GameState
     public string?[] Structure => _structure ??= new string?[Map.TileCount];
 
     public List<Construction> Constructions { get; } = new();
+
+    private Diplomacy? _diplomacy;
+
+    /// <summary>Treaties, opinions, minor tasks and integrations.</summary>
+    public Diplomacy Diplomacy => _diplomacy ??= new Diplomacy(Players);
+
+    /// <summary>True when the two nations are at war, so their stacks fight and their land can be taken.</summary>
+    public bool AtWar(int a, int b) => a != b && Diplomacy.Get(a, b) == Treaty.War;
 
     public List<Stack> Stacks { get; } = new();
     public int Tick { get; set; }
@@ -203,6 +214,10 @@ public sealed class GameState
     public long Stat(int player, string key, long baseValue) =>
         StatResolver.Resolve(key, baseValue, new IModifierSource[] { Players[player].Leader });
 
+    /// <summary>Minor cultures: conquering one minor angers the others of its culture.</summary>
+    public const int Cultures = 3;
+    public int CultureOf(int minorId) => minorId % Cultures;
+
     public IEnumerable<Player> Majors => Players.Where(p => !p.Minor);
 
     public int OwnedTiles(int player) => TileOwner.Count(o => o == player);
@@ -224,12 +239,22 @@ public sealed class GameState
         foreach (int c in CapitalHeld) Add(c);
         foreach (int o in TileOwner) Add(o);
         foreach (var p in Players) { Add(p.Id); Add(p.Supply); Add(p.Energy); Add(p.Influence); Add(p.Starved ? 1 : 0); }
+        var dip = Diplomacy;
+        foreach (var tr in dip.Raw) Add((int)tr);
+        foreach (int c in dip.TreatyCooldownUntil) Add(c);
+        foreach (int c in dip.RefusedUntil) Add(c);
+        foreach (int c in dip.DemandRefusedUntil) Add(c);
+        foreach (int c in dip.IntegratedInto) Add(c);
+        foreach (int c in dip.NextRaid) Add(c);
+        foreach (var m in dip.Mods) { Add(m.From); Add(m.Toward); Add(m.Value); Add(m.Tick); foreach (char ch in m.Kind) Add(ch); }
+        foreach (var k in dip.Tasks) { Add(k.Id); Add(k.Minor); Add(k.Amount); Add(k.Target); Add(k.Expires); }
+        foreach (var i in dip.Integrations) { Add(i.Player); Add(i.Minor); Add(i.TicksLeft); }
         for (int t = 0; t < Structure.Length; t++) if (Structure[t] != null) { Add(t); foreach (char ch in Structure[t]!) Add(ch); }
         foreach (var c in Constructions) { Add(c.Tile); Add(c.Owner); Add(c.StackId); Add(c.TicksLeft); foreach (char ch in c.Structure) Add(ch); }
         foreach (var s in Stacks)
         {
             Add(s.Id); Add(s.Owner); Add(s.Tile); Add(s.Target); Add(s.Timer);
-            Add(s.Hp); Add(s.MaxHp); Add(s.Retreating ? 1 : 0); Add(s.StillTicks); Add(s.Entrench);
+            Add(s.Hp); Add(s.MaxHp); Add(s.Retreating ? 1 : 0); Add(s.Raider ? 1 : 0); Add(s.StillTicks); Add(s.Entrench);
             foreach (var u in s.Units) { foreach (char ch in u.Key) Add(ch); Add(u.Value); }
             Add(s.Path.Count);
             foreach (int t in s.Path) Add(t);

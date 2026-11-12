@@ -30,8 +30,14 @@ public sealed class Personality
     /// <summary>Engineer stacks it keeps alive.</summary>
     public int Engineers { get; init; }
 
+    /// <summary>Points added to every treaty it is asked to sign: positive prefers peace, negative prefers war (-100..100).</summary>
+    public int PeaceBias { get; init; }
+
+    /// <summary>How hard it works to befriend minor powers, in permille (0 never, 1000 steadily, 3000 obsessively).</summary>
+    public int Courting { get; init; }
+
     private sealed record Dto(string Id, string Name, int Expand, int Develop, int Defend, int Attack,
-        int Muster, int RiskPermille, int PainThreshold, int Engineers);
+        int Muster, int RiskPermille, int PainThreshold, int Engineers, int PeaceBias = 0, int Courting = 0);
     private sealed record FileDto(List<Dto>? Personalities);
 
     private static readonly JsonSerializerOptions Opts = new() { PropertyNameCaseInsensitive = true, ReadCommentHandling = JsonCommentHandling.Skip };
@@ -63,10 +69,12 @@ public sealed class Personality
             if (d.RiskPermille < 100) throw new FormatException($"Personality {d.Id}: riskPermille must be at least 100");
             if (d.PainThreshold < 1 || d.PainThreshold > 1000) throw new FormatException($"Personality {d.Id}: painThreshold must be 1..1000");
             if (d.Engineers < 0 || d.Engineers > 5) throw new FormatException($"Personality {d.Id}: engineers must be 0..5");
+            if (d.PeaceBias is < -100 or > 100) throw new FormatException($"Personality {d.Id}: peaceBias must be -100..100");
+            if (d.Courting is < 0 or > 3000) throw new FormatException($"Personality {d.Id}: courting must be 0..3000");
             list.Add(new Personality
             {
                 Id = d.Id, Name = d.Name, Expand = d.Expand, Develop = d.Develop, Defend = d.Defend, Attack = d.Attack,
-                Muster = d.Muster, RiskPermille = d.RiskPermille, PainThreshold = d.PainThreshold, Engineers = d.Engineers,
+                Muster = d.Muster, RiskPermille = d.RiskPermille, PainThreshold = d.PainThreshold, Engineers = d.Engineers, PeaceBias = d.PeaceBias, Courting = d.Courting,
             });
         }
         return list;

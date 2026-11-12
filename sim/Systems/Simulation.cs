@@ -25,6 +25,7 @@ public static class Simulation
         Capture(s, events);
         Encircle(s, events);
         Economy(s, events);
+        DiplomacySystem.Tick(s, events);
         Victory(s, events, surrendered);
         s.Tick++;
         return events;
@@ -77,6 +78,12 @@ public static class Simulation
                 case BuildCommand bc:
                     StartBuild(s, bc, events);
                     break;
+                case GiftCommand or ProposeTreatyCommand or BreakTreatyCommand or DeclareWarCommand or IntegrateCommand or DemandSurrenderCommand:
+                {
+                    int gave = DiplomacySystem.Apply(s, cmd, events);
+                    if (gave != -1 && surrendered == -1) surrendered = gave;
+                    break;
+                }
                 case StopCommand c:
                 {
                     var st = s.FindStack(c.StackId);
@@ -97,13 +104,13 @@ public static class Simulation
     /// Hostile stacks fight when they share a tile, or when either has begun a hop into the
     /// other's tile. Fights therefore start when the order begins, not on arrival.
     /// </summary>
-    public static bool Fighting(Stack a, Stack b) =>
-        a.Owner != b.Owner && (a.Tile == b.Tile || a.Target == b.Tile || b.Target == a.Tile);
+    public static bool Fighting(GameState s, Stack a, Stack b) =>
+        s.AtWar(a.Owner, b.Owner) && (a.Tile == b.Tile || a.Target == b.Tile || b.Target == a.Tile);
 
     public static bool Engaged(GameState s, Stack a)
     {
         foreach (var o in s.Stacks)
-            if (o != a && Fighting(a, o)) return true;
+            if (o != a && Fighting(s, a, o)) return true;
         return false;
     }
 
@@ -178,7 +185,7 @@ public static class Simulation
             var foeOwners = new HashSet<int>();
             foreach (var foe in s.Stacks)
             {
-                if (!Fighting(victim, foe)) continue;
+                if (!Fighting(s, victim, foe)) continue;
                 int bt = BattleTile(victim, foe);
                 raw += AttackOutput(s, foe, victim, bt, engaged: true, supportOnly: false);
                 fronts.Add(foe.Tile);
@@ -295,7 +302,7 @@ public static class Simulation
     {
         foreach (var o in s.Stacks)
         {
-            if (!Fighting(v, o)) continue;
+            if (!Fighting(s, v, o)) continue;
             if (v.Target == o.Tile && o.Target != v.Tile) return true;
             if (v.Tile == o.Tile && s.TileOwner[v.Tile] != v.Owner && s.TileOwner[v.Tile] == o.Owner) return true;
         }
@@ -307,7 +314,7 @@ public static class Simulation
         foreach (int n in s.Map.Neighbors[st.Tile])
         {
             if (s.TileOwner[n] != st.Owner) continue;
-            if (s.Stacks.Any(o => o.Owner != st.Owner && (o.Tile == n || o.Target == n))) continue;
+            if (s.Stacks.Any(o => s.AtWar(o.Owner, st.Owner) && (o.Tile == n || o.Target == n))) continue;
             return n;
         }
         return -1;
@@ -368,6 +375,7 @@ public static class Simulation
     {
         int prev = s.TileOwner[tile];
         s.TileOwner[tile] = newOwner;
+        DiplomacySystem.OnCapture(s, newOwner, prev);
         events.Add(new TileCaptured(tile, newOwner, prev));
         s.Constructions.RemoveAll(c => c.Tile == tile && c.Owner != newOwner);
         var sd = BuiltStructure(s, tile);
@@ -384,9 +392,11 @@ public static class Simulation
     {
         foreach (var st in s.Stacks)
         {
-            if (s.TileOwner[st.Tile] == st.Owner) continue;
+            int holder = s.TileOwner[st.Tile];
+            if (holder == st.Owner || st.Raider) continue;
+            if (holder != -1 && !s.AtWar(st.Owner, holder)) continue;                          // treaty partners keep their land
             if (!st.Units.Keys.Any(k => s.Catalog.Units[k].CaptureMultiplier > 0)) continue;   // artillery and engineers cannot take ground
-            if (s.Stacks.Any(o => o.Owner != st.Owner && o.Tile == st.Tile)) continue;
+            if (s.Stacks.Any(o => s.AtWar(o.Owner, st.Owner) && o.Tile == st.Tile)) continue;
             Flip(s, st.Tile, st.Owner, events);
         }
     }
@@ -433,8 +443,9 @@ public static class Simulation
                     }
                 }
                 if (!enclosed) continue;
+                if (pocket.Any(t => s.TileOwner[t] != -1 && !s.AtWar(p.Id, s.TileOwner[t]))) continue;   // a partner's land is not ours to swallow
                 if (pocket.Any(t => s.Players.Any(o => o.Id != p.Id && o.Capital == t && !o.Minor))) continue;
-                if (s.Stacks.Any(x => x.Owner != p.Id && pocket.Contains(x.Tile))) continue;
+                if (s.Stacks.Any(x => s.AtWar(x.Owner, p.Id) && pocket.Contains(x.Tile))) continue;
 
                 pocket.Sort();
                 foreach (int t in pocket) Flip(s, t, p.Id, events);
@@ -484,7 +495,7 @@ public static class Simulation
             int tile = t == -1 ? p.Capital : t;
             if (t != -1 && tile == p.Capital) continue;
             if (!IsSpawnSite(s, p, tile)) continue;
-            if (s.Stacks.Any(x => x.Owner != p.Id && x.Tile == tile)) continue;
+            if (s.Stacks.Any(x => s.AtWar(x.Owner, p.Id) && x.Tile == tile)) continue;
             int count = s.Stacks.Count(x => x.Owner == p.Id && x.Tile == tile);
             if (count < bestCount) { bestCount = count; best = tile; }
         }
@@ -562,6 +573,7 @@ public static class Simulation
             alloy += a; energy += e; influence += i;
         }
         if (s.TileOwner[p.Capital] == p.Id) energy += s.Stat(p.Id, "yield.energy", Rules.CapitalEnergyMilli);
+        alloy += alloy * DiplomacySystem.TradeBonusPermille(s, p.Id) / 1000;
         return (alloy, energy, influence);
     }
 
@@ -615,7 +627,7 @@ public static class Simulation
         if (s.Stacks.Count(x => x.Owner == p.Id) >= p.MaxStacks) return;
         int at = rc.Tile == -1 ? SpawnTile(s, p) : rc.Tile;
         if (at < 0 || at >= s.Map.TileCount || !IsSpawnSite(s, p, at)) return;
-        if (s.Stacks.Any(x => x.Owner != p.Id && x.Tile == at)) return;
+        if (s.Stacks.Any(x => s.AtWar(x.Owner, p.Id) && x.Tile == at)) return;
         long alloy = UnitCost(s, p.Id, def, def.Cost.Alloy);
         long energy = def.Cost.Energy;
         if (p.Supply < alloy || p.Energy < energy) return;

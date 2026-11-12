@@ -32,6 +32,7 @@ public static class AiMatch
             s.Players[i].AutoRecruit = false;
             s.Players[i].MaxStacks = AiMaxStacks;
             ais[i] = new RivalAi(i, Personality.ForSeed(seed, i));
+            s.Players[i].PersonalityId = ais[i].Personality.Id;
         }
         return s;
     }

@@ -1,9 +1,9 @@
 {
   "personalities": [
-    { "id": "conqueror",   "name": "Conqueror",   "expand": 800,  "develop": 500,  "defend": 600,  "attack": 1300, "muster": 8,  "riskPermille": 1700, "painThreshold": 800, "engineers": 1 },
-    { "id": "builder",     "name": "Builder",     "expand": 900,  "develop": 1300, "defend": 1100, "attack": 600,  "muster": 10, "riskPermille": 1200, "painThreshold": 600, "engineers": 2 },
-    { "id": "opportunist", "name": "Opportunist", "expand": 900,  "develop": 700,  "defend": 800,  "attack": 1000, "muster": 6,  "riskPermille": 1000, "painThreshold": 720, "engineers": 1 },
-    { "id": "diplomat",    "name": "Diplomat",    "expand": 1200, "develop": 1000, "defend": 900,  "attack": 700,  "muster": 8,  "riskPermille": 1300, "painThreshold": 680, "engineers": 1 },
-    { "id": "zealot",      "name": "Zealot",      "expand": 700,  "develop": 600,  "defend": 700,  "attack": 1250, "muster": 7,  "riskPermille": 2000, "painThreshold": 990, "engineers": 1 }
+    { "id": "conqueror",   "name": "Conqueror",   "expand": 800,  "develop": 500,  "defend": 600,  "attack": 1300, "muster": 8,  "riskPermille": 1700, "painThreshold": 800, "engineers": 1, "peaceBias": -30, "courting": 300 },
+    { "id": "builder",     "name": "Builder",     "expand": 900,  "develop": 1300, "defend": 1100, "attack": 600,  "muster": 10, "riskPermille": 1200, "painThreshold": 600, "engineers": 2, "peaceBias": 25, "courting": 900 },
+    { "id": "opportunist", "name": "Opportunist", "expand": 900,  "develop": 700,  "defend": 800,  "attack": 1000, "muster": 6,  "riskPermille": 1000, "painThreshold": 720, "engineers": 1, "peaceBias": 0, "courting": 500 },
+    { "id": "diplomat",    "name": "Diplomat",    "expand": 1200, "develop": 1000, "defend": 900,  "attack": 700,  "muster": 8,  "riskPermille": 1300, "painThreshold": 680, "engineers": 1, "peaceBias": 15, "courting": 1600 },
+    { "id": "zealot",      "name": "Zealot",      "expand": 700,  "develop": 600,  "defend": 700,  "attack": 1250, "muster": 7,  "riskPermille": 2000, "painThreshold": 990, "engineers": 1, "peaceBias": -60, "courting": 100 }
   ]
 }

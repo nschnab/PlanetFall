@@ -20,6 +20,9 @@ public sealed class Stack
     public long MaxHp { get; set; }
     public bool Retreating { get; set; }
 
+    /// <summary>A minor power's raiding party: it fights, but never takes ground.</summary>
+    public bool Raider { get; set; }
+
     /// <summary>Ticks stood still and not under attack; drives entrenchment.</summary>
     public int StillTicks { get; set; }
 

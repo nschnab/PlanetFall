@@ -35,6 +35,12 @@ public partial class Match : Node2D
     private bool _debug;
     private string _endReason = "";
 
+    private bool _dipOpen;
+    private int _dipSel = -1;
+    private readonly List<string> _log = new();
+    private string _toast = "";
+    private int _toastUntil;
+
     private GameState _s = null!;
     private RivalAi _ai = null!;
     private readonly List<Command> _pending = new();
@@ -62,7 +68,11 @@ public partial class Match : Node2D
         _s.Players[0].AutoRecruit = false;      // the player buys units by hand (I/A/G/V/N)
         _s.Players[1].AutoRecruit = false;      // the rival buys its own mixed army through RecruitCommands
         _ai = new RivalAi(1, Personality.ForSeed(seed, 1));
+        _s.Players[1].PersonalityId = _ai.Personality.Id;
         _endReason = "";
+        _dipSel = -1;
+        _log.Clear();
+        _toast = "";
         _pending.Clear();
         _selected = -1;
         _acc = 0;
@@ -84,12 +94,52 @@ public partial class Match : Node2D
                 var cmds = new List<Command>(_pending);
                 _pending.Clear();
                 cmds.AddRange(_ai.Think(_s));
-                foreach (var ev in Simulation.Step(_s, cmds))
-                    if (ev is PlayerDefeated d) _endReason = d.Reason;
+                foreach (var ev in Simulation.Step(_s, cmds)) OnEvent(ev);
             }
         }
         if (_selected != -1 && _s.FindStack(_selected) == null) _selected = -1;
         QueueRedraw();
+    }
+
+    // ---- diplomacy log --------------------------------------------------------------------
+
+    private string NameOf(int p) => _s.Players[p].Leader.Name;
+
+    private static string TreatyName(Treaty t) => t switch
+    {
+        Treaty.War => "War", Treaty.Neutral => "Neutral", Treaty.NonAggression => "Non-Aggression",
+        Treaty.TradePact => "Trade Pact", _ => "Alliance",
+    };
+
+    private static string ShortTreaty(Treaty t) => t switch
+    {
+        Treaty.Neutral => "Peace", Treaty.NonAggression => "Non-Agg.", Treaty.TradePact => "Trade", _ => "Alliance",
+    };
+
+    private void Note(string msg)
+    {
+        _log.Add($"{_s.Tick / 600}:{_s.Tick / 10 % 60:00}  {msg}");
+        if (_log.Count > 60) _log.RemoveAt(0);
+        _toast = msg;
+        _toastUntil = _s.Tick + 90;
+    }
+
+    private void OnEvent(SimEvent ev)
+    {
+        switch (ev)
+        {
+            case PlayerDefeated d: _endReason = d.Reason; break;
+            case ProposalAnswered a when a.From == 0: Note($"{NameOf(a.To)} on {TreatyName(a.Treaty)}: {a.Reason}"); break;
+            case SurrenderAnswered a when a.To == 0: Note($"{NameOf(a.From)}: {a.Reason}"); break;
+            case TreatyChanged c when c.A == 0 || c.B == 0: Note($"{NameOf(c.A == 0 ? c.B : c.A)}: now {TreatyName(c.New)}"); break;
+            case Treacherous t: Note(t.Player == 0 ? "You are now TREACHEROUS: everyone trusts you less, and no treaties for 5 minutes." : $"{NameOf(t.Player)} broke a pact and is Treacherous."); break;
+            case TaskPosted p when p.Kind == "gift": Note($"{NameOf(p.Minor)} asks for a gift of {DiplomacySystem.TaskGiftAlloy} alloy."); break;
+            case RaidLaunched r: Note($"{NameOf(r.Minor)} sends raiders at {(r.Target == 0 ? "you" : NameOf(r.Target))}."); break;
+            case TaskCompleted c when c.Player == 0: Note($"{NameOf(c.Minor)} is grateful."); break;
+            case IntegrationStarted i when i.Player == 0: Note($"Integrating {NameOf(i.Minor)}: 60 s."); break;
+            case IntegrationCancelled i when i.Player == 0: Note($"Integration of {NameOf(i.Minor)} fell through: {i.Reason}."); break;
+            case MinorIntegrated i when i.Player == 0: Note($"{NameOf(i.Minor)} has joined you."); break;
+        }
     }
 
     // ---- input ----------------------------------------------------------------------------
@@ -166,6 +216,7 @@ public partial class Match : Node2D
                 case Key.X: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "extractor")); break;
                 case Key.C: if (_selected != -1) _pending.Add(new BuildCommand(0, _selected, "fortress")); break;
                 case Key.F3: _debug = !_debug; break;
+                case Key.D: _dipOpen = !_dipOpen; break;
                 case Key.R: if (_s.Over) Start((ulong)Random.Shared.NextInt64(1, 1_000_000)); break;
             }
         }
@@ -185,6 +236,8 @@ public partial class Match : Node2D
         DrawStacks();
         DrawHud();
         if (_debug) DrawDebug();
+        if (_dipOpen) DrawDiplomacy();
+        else if (_s.Tick < _toastUntil) DrawString(_font, new Vector2(14, 64), _toast, HorizontalAlignment.Left, 1000, 15, new Color(1f, 0.95f, 0.6f));
         if (_s.Over) DrawGameOver();
     }
 
@@ -371,16 +424,113 @@ public partial class Match : Node2D
         }
 
         Button(new Rect2(1180, 6, 90, 28), "Surrender", () => _pending.Add(new SurrenderCommand(0)));
+        Button(new Rect2(1060, 6, 110, 28), _dipOpen ? "Close (D)" : "Diplomacy (D)", () => _dipOpen = !_dipOpen, new Color(0.12f, 0.2f, 0.3f));
         DrawString(_font, new Vector2(14, 712),
-            "L-click select, L/R-click tile to move (Shift = queue)  S stop  Space pause  1/2/3 speed  F3 AI debug  |  Buy: I infantry A armor G artillery V recon N engineer  |  Engineer: Z depot X extractor C fortress",
+            "L-click select, L/R-click tile to move (Shift = queue)  S stop  Space pause  1/2/3 speed  F3 AI debug  D diplomacy  |  Buy: I infantry A armor G artillery V recon N engineer  |  Engineer: Z depot X extractor C fortress",
             HorizontalAlignment.Left, -1, 13, new Color(1, 1, 1, 0.55f));
     }
 
-    private void Button(Rect2 r, string label, Action act)
+
+    // ---- diplomacy panel ------------------------------------------------------------------
+
+    private void DrawDiplomacy()
     {
-        DrawRect(r, new Color(0.25f, 0.12f, 0.12f));
+        const float x = 700, w = 570, rowH = 26;
+        var dip = _s.Diplomacy;
+        var me = _s.Players[0];
+        var dist = new int[_s.Map.TileCount];
+        Array.Fill(dist, int.MaxValue);
+        var q = new Queue<int>();
+        dist[me.Capital] = 0;
+        q.Enqueue(me.Capital);
+        while (q.Count > 0)
+        {
+            int c = q.Dequeue();
+            foreach (int n in _s.Map.Neighbors[c]) if (dist[n] == int.MaxValue) { dist[n] = dist[c] + 1; q.Enqueue(n); }
+        }
+        var others = new List<int> { 1 };
+        others.AddRange(_s.Players.Where(p => p.Minor && dip.IntegratedInto[p.Id] == -1).OrderBy(p => dist[p.Capital]).ThenBy(p => p.Id).Select(p => p.Id));
+        if (_dipSel == -1 || !others.Contains(_dipSel)) _dipSel = others[0];
+
+        float top = TopBar + 8;
+        float height = 24 + others.Count * rowH + 4 + 20 + 6 * 17 + 20 + 6 * 17 + 10;
+        DrawRect(new Rect2(x, top, w, height), new Color(0.04f, 0.05f, 0.08f, 0.94f));
+        DrawRect(new Rect2(x, top, w, height), new Color(1, 1, 1, 0.3f), false, 1f);
+        DrawString(_font, new Vector2(x + 10, top + 17), $"DIPLOMACY   Influence {me.Influence / 1000}   Alloy {me.Supply / 1000}" +
+            (dip.TreatyCooldownUntil[0] > _s.Tick ? $"   (no treaties for {(dip.TreatyCooldownUntil[0] - _s.Tick) / 10}s)" : ""),
+            HorizontalAlignment.Left, -1, 14, Colors.White);
+
+        float y = top + 24;
+        foreach (int id in others)
+        {
+            var p = _s.Players[id];
+            var treaty = dip.Get(0, id);
+            int op = DiplomacySystem.Opinion(_s, id, 0);
+            bool minor = p.Minor;
+            string mood = minor ? DiplomacySystem.MoodOf(_s, id, 0).ToString() : "Rival";
+            if (id == _dipSel) DrawRect(new Rect2(x + 4, y, w - 8, rowH - 2), new Color(1, 1, 1, 0.10f));
+            int pick = id;
+            _buttons.Add((new Rect2(x + 4, y, 320, rowH - 2), () => _dipSel = pick));
+            string label = minor ? $"{NameOf(id)} (hop {dist[p.Capital]})" : $"RIVAL  {_ai.Personality.Name}";
+            DrawString(_font, new Vector2(x + 10, y + 17), $"{label}  {mood}  {TreatyName(treaty)}  op {op:+#;-#;0}", HorizontalAlignment.Left, 320, 12, ColorOf(id).Lightened(0.5f));
+
+            int bx = (int)(x + w - 240);
+            Button(new Rect2(bx, y, 62, rowH - 3), "Gift 15", () => _pending.Add(new GiftCommand(0, pick, 15)), new Color(0.15f, 0.3f, 0.2f), 12);
+            if (treaty < Treaty.Alliance)
+            {
+                var next = treaty + 1;
+                long cost = DiplomacySystem.TreatyInfluence[(int)next] / 1000;
+                Button(new Rect2(bx + 66, y, 104, rowH - 3), $"{ShortTreaty(next)}{(cost > 0 ? $" {cost}i" : "")}",
+                    () => _pending.Add(new ProposeTreatyCommand(0, pick, next)), new Color(0.12f, 0.2f, 0.3f), 12);
+            }
+            else if (minor && !dip.Integrations.Any(i => i.Minor == id))
+                Button(new Rect2(bx + 66, y, 104, rowH - 3), $"Integrate {DiplomacySystem.IntegrateInfluence / 1000}i", () => _pending.Add(new IntegrateCommand(0, pick)), new Color(0.2f, 0.25f, 0.1f), 12);
+            else if (minor)
+            {
+                var it = dip.Integrations.First(i => i.Minor == id);
+                DrawString(_font, new Vector2(bx + 70, y + 17), $"joining {it.TicksLeft / 10}s", HorizontalAlignment.Left, -1, 12, new Color(0.8f, 1f, 0.6f));
+            }
+            if (treaty >= Treaty.NonAggression)
+                Button(new Rect2(bx + 174, y, 62, rowH - 3), "Break", () => _pending.Add(new BreakTreatyCommand(0, pick)), null, 12);
+            else if (treaty != Treaty.War)
+                Button(new Rect2(bx + 174, y, 62, rowH - 3), "War", () => _pending.Add(new DeclareWarCommand(0, pick)), null, 12);
+            else if (!minor)
+                Button(new Rect2(bx + 174, y, 62, rowH - 3), "Demand", () => _pending.Add(new DemandSurrenderCommand(0, pick)), new Color(0.35f, 0.2f, 0.05f), 12);
+            y += rowH;
+        }
+
+        // Why they feel the way they do.
+        y += 4;
+        var lines = new List<OpinionLine>();
+        int total = DiplomacySystem.Opinion(_s, _dipSel, 0, lines);
+        var tr = dip.Get(0, _dipSel);
+        string need = tr < Treaty.Alliance ? $"{ShortTreaty(tr + 1)} needs opinion {DiplomacySystem.TreatyNeed[(int)tr + 1]}" : $"integration needs {DiplomacySystem.IntegrateOpinion}";
+        DrawString(_font, new Vector2(x + 10, y + 14), $"{NameOf(_dipSel)} thinks of you: {total:+#;-#;0}   ({need})", HorizontalAlignment.Left, -1, 13, Colors.White);
+        y += 20;
+        for (int i = 0; i < 6; i++)
+        {
+            if (i < lines.Count)
+                DrawString(_font, new Vector2(x + 20, y + 13), $"{lines[i].Points:+#;-#;0}  {lines[i].Label}", HorizontalAlignment.Left, -1, 12, lines[i].Points >= 0 ? new Color(0.6f, 1f, 0.6f) : new Color(1f, 0.6f, 0.6f));
+            y += 17;
+        }
+        var task = dip.Tasks.FirstOrDefault(tk => tk.Minor == _dipSel && (tk.Player == -1 || tk.Player == 0));
+        if (task != null)
+            DrawString(_font, new Vector2(x + 10, y + 13), task.Kind == "gift" ? $"Task: give {task.Amount / 1000} alloy (+{task.Reward} opinion), {(task.Expires - _s.Tick) / 10}s left"
+                                                         : $"Task: destroy their raiders (+{task.Reward} opinion), {(task.Expires - _s.Tick) / 10}s left",
+                HorizontalAlignment.Left, -1, 12, new Color(1f, 0.9f, 0.5f));
+        y += 20;
+        foreach (var line in _log.TakeLast(6))
+        {
+            DrawString(_font, new Vector2(x + 10, y + 13), line, HorizontalAlignment.Left, w - 20, 12, new Color(1, 1, 1, 0.75f));
+            y += 17;
+        }
+    }
+
+    private void Button(Rect2 r, string label, Action act, Color? fill = null, int size = 15)
+    {
+        DrawRect(r, fill ?? new Color(0.25f, 0.12f, 0.12f));
         DrawRect(r, new Color(1, 1, 1, 0.4f), false, 1f);
-        DrawString(_font, r.Position + new Vector2(10, 19), label, HorizontalAlignment.Left, -1, 15, Colors.White);
+        DrawString(_font, r.Position + new Vector2(8, r.Size.Y * 0.5f + size * 0.35f), label, HorizontalAlignment.Left, -1, size, Colors.White);
         _buttons.Add((r, act));
     }
 
