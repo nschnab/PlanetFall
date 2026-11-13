@@ -1,10 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using Planetfall.Sim.Ai;
 using Planetfall.Sim.Core;
 using Planetfall.Sim.MapGen;
+using Planetfall.Sim.Presentation;
 using Planetfall.Sim.Systems;
 using Planetfall.Sim.World;
 
@@ -12,12 +13,10 @@ namespace Planetfall;
 
 public partial class Match
 {
-    private static readonly Color[] OwnerColor =
-    {
-        new(0.20f, 0.45f, 0.85f), new(0.80f, 0.25f, 0.25f), new(0.85f, 0.65f, 0.15f),
-    };
-    private static Color ColorOf(int owner) => OwnerColor[Math.Min(owner, OwnerColor.Length - 1)];
-    private static readonly Color Neutral = new(0.24f, 0.26f, 0.30f);
+    private static Color Gd(Rgb c) => new(c.R / 255f, c.G / 255f, c.B / 255f);
+    private static Color ColorOf(int owner) => Gd(Palette.OwnerColor(owner));
+    private static Color FillOf(int owner) => Gd(Palette.TileFill(owner));
+    private static readonly Color Neutral = Gd(Palette.Neutral);
     private static readonly Color Unseen = new(0.03f, 0.035f, 0.05f);
 
     private Fog Fog => _m.Fog;
@@ -26,6 +25,7 @@ public partial class Match
     {
         _buttons.Clear();
         DrawRect(new Rect2(0, 0, W, H), new Color(0.07f, 0.08f, 0.10f));
+        if (_screen == Screen.Sheet) { DrawSheet(); return; }
         if (_screen == Screen.Menu) { DrawMainMenu(); return; }
         if (_screen == Screen.Loading) { DrawLoading(); return; }
 
@@ -102,7 +102,7 @@ public partial class Match
             var sight = Fog.Tiles[t];
             int o = Fog.KnownOwner(_s, t);
 
-            var fill = o == -1 ? Neutral : ColorOf(o).Darkened(0.35f);
+            var fill = FillOf(o);
             switch (terrain)
             {
                 case Terrain.Water: fill = new Color(0.07f, 0.16f, 0.30f); break;
@@ -139,6 +139,13 @@ public partial class Match
                         _ => new Color(1f, 0.85f, 0.25f, 0.9f),
                     });
             }
+        }
+        DrawBorders();
+        foreach (var kv in _flash.ToList())
+        {
+            int age = _s.Tick - kv.Value;
+            if (age > 8) { _flash.Remove(kv.Key); continue; }
+            DrawColoredPolygon(Poly(kv.Key), new Color(1, 1, 1, 0.55f * (1 - age / 8f)));
         }
         foreach (var p in _s.Players)
         {
@@ -216,9 +223,68 @@ public partial class Match
                 }
                 if (st.Entrench > 0)
                     DrawString(_font, pos + new Vector2(-14, r + 14), $"+{st.Entrench / 10}% def", HorizontalAlignment.Left, -1, 11, new Color(0.7f, 1f, 0.7f));
+                DrawGlyph(pos, r * 0.55f, Glyphs.DominantRole(st.Units), Colors.White, Math.Max(2f, r * 0.12f));
                 var txt = st.EffectiveStrength.ToString();
-                var sz = _font.GetStringSize(txt, HorizontalAlignment.Left, -1, 14);
-                DrawString(_font, pos + new Vector2(-sz.X / 2, 5), txt, HorizontalAlignment.Left, -1, 14, Colors.White);
+                var sz = _font.GetStringSize(txt, HorizontalAlignment.Left, -1, 12);
+                var tp = pos + new Vector2(r * 0.55f, r * 0.95f);
+                DrawRect(new Rect2(tp + new Vector2(-2, -11), new Vector2(sz.X + 4, 14)), new Color(0, 0, 0, 0.7f));
+                DrawString(_font, tp, txt, HorizontalAlignment.Left, -1, 12, Colors.White);
+            }
+        }
+    }
+
+    private void DrawGlyph(Vector2 c, float size, string role, Color col, float width)
+    {
+        var g = Glyphs.Of(role);
+        // dark under-stroke keeps the glyph readable on any owner colour
+        foreach (var (x1, y1, x2, y2) in g.Lines)
+            DrawLine(c + new Vector2((float)x1, (float)y1) * size, c + new Vector2((float)x2, (float)y2) * size, new Color(0, 0, 0, 0.85f), width + 2.5f);
+        foreach (var (x1, y1, x2, y2) in g.Lines)
+            DrawLine(c + new Vector2((float)x1, (float)y1) * size, c + new Vector2((float)x2, (float)y2) * size, col, width);
+    }
+
+    /// <summary>Shared tile edges in map units, found once per match.</summary>
+    private readonly List<(int A, int B, Vector2 P, Vector2 Q)> _edges = new();
+
+    private void BuildEdges()
+    {
+        _edges.Clear();
+        var map = _s.Map;
+        for (int a = 0; a < map.TileCount; a++)
+            foreach (int b in map.Neighbors[a])
+            {
+                if (b < a) continue;
+                var pa = map.Polygon[a];
+                var pb = map.Polygon[b];
+                var shared = new List<Vector2>();
+                for (int i = 0; i + 1 < pa.Length; i += 2)
+                    for (int j = 0; j + 1 < pb.Length; j += 2)
+                        if (Math.Abs(pa[i] - pb[j]) + Math.Abs(pa[i + 1] - pb[j + 1]) <= 8)
+                        {
+                            shared.Add(new Vector2(pa[i], pa[i + 1]) / MapData.Scale);
+                            break;
+                        }
+                if (shared.Count >= 2) _edges.Add((a, b, shared[0], shared[1]));
+            }
+    }
+
+    /// <summary>Glowing frontier lines in each owner's colour, on that owner's side of the edge.</summary>
+    private void DrawBorders()
+    {
+        float pulse = 0.65f + 0.2f * Mathf.Sin(Time.GetTicksMsec() / 450f);
+        foreach (var (a, b, p, q) in _edges)
+        {
+            int oa = Fog.Tiles[a] == Sight.Unknown ? -1 : Fog.KnownOwner(_s, a);
+            int ob = Fog.Tiles[b] == Sight.Unknown ? -1 : Fog.KnownOwner(_s, b);
+            if (oa == ob) continue;
+            var sp = ToScreen(p.X, p.Y);
+            var sq = ToScreen(q.X, q.Y);
+            var mid = (sp + sq) / 2;
+            foreach (var (o, t) in new[] { (oa, a), (ob, b) })
+            {
+                if (o == -1) continue;
+                var toward = (Centre(t) - mid).Normalized() * 1.8f;
+                DrawLine(sp + toward, sq + toward, ColorOf(o).Lightened(0.35f) with { A = pulse }, 2.6f);
             }
         }
     }
@@ -264,7 +330,8 @@ public partial class Match
         float y = TopBar + 8;
         foreach (var a in _alerts)
         {
-            var r = new Rect2(W - 262, y, 254, 24);
+            float age = AlertTicks - (a.Until - _s.Tick);
+            var r = new Rect2(W - 262 + (1 - Mathf.Clamp(age / 5f, 0f, 1f)) * 90f, y, 254, 24);
             float fade = Mathf.Clamp((a.Until - _s.Tick) / 20f, 0.3f, 1f);
             DrawRect(r, new Color(0, 0, 0, 0.65f * fade));
             DrawRect(new Rect2(r.Position, new Vector2(4, r.Size.Y)), a.Colour with { A = fade });
@@ -390,8 +457,10 @@ public partial class Match
 
     private void Button(Rect2 r, string label, Action act, Color? fill = null, int size = 15)
     {
-        DrawRect(r, fill ?? new Color(0.25f, 0.12f, 0.12f));
-        DrawRect(r, new Color(1, 1, 1, 0.4f), false, 1f);
+        var baseFill = fill ?? new Color(0.25f, 0.12f, 0.12f);
+        bool hot = r.HasPoint(_lastMouse);
+        DrawRect(r, hot ? baseFill.Lightened(0.22f) : baseFill);
+        DrawRect(r, new Color(1, 1, 1, hot ? 0.8f : 0.4f), false, hot ? 2f : 1f);
         DrawString(_font, r.Position + new Vector2(8, r.Size.Y * 0.5f + size * 0.35f), label, HorizontalAlignment.Left, (int)r.Size.X - 8, size, Colors.White);
         _buttons.Add((r, act));
     }

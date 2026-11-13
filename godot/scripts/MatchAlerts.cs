@@ -27,6 +27,7 @@ public partial class Match
         if (_lastAlert.TryGetValue(kind, out int last) && _s.Tick - last < AlertCooldownTicks) return;
         _lastAlert[kind] = _s.Tick;
         _alerts.Insert(0, new Alert(text, tile, _s.Tick + AlertTicks, colour));
+        Sfx(colour == Good ? "capture" : "alert");
         if (_alerts.Count > 6) _alerts.RemoveAt(_alerts.Count - 1);
     }
 
@@ -84,9 +85,12 @@ public partial class Match
 
     private void OnEvent(SimEvent ev)
     {
+        if (ev is TileCaptured tc && _m.Fog.Visible(tc.Tile)) _flash[tc.Tile] = _s.Tick;
         switch (ev)
         {
-            case PlayerDefeated d: _endReason = d.Reason; break;
+            case PlayerDefeated d: _endReason = d.Reason; Sfx(d.Player == 0 ? "defeat" : "victory"); break;
+            case StackSpawned sp when sp.Owner == 0: Sfx("recruit"); break;
+            case GiftGiven gg when gg.From == 0: Sfx("gift"); break;
             case StackDied d when d.Owner == 0: AddAlert("died", "Stack lost", d.Tile, Bad); break;
             case TileCaptured c when c.PreviousOwner == 0: AddAlert("tilelost", "Territory lost", c.Tile, Bad); break;
             case TileCaptured c when c.NewOwner == 0 && c.PreviousOwner != -1: AddAlert("tilewon", "Territory captured", c.Tile, Good); break;

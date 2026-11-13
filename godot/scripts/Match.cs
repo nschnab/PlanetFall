@@ -6,6 +6,8 @@ using System.Threading.Tasks;
 using Godot;
 using Planetfall.Sim.Ai;
 using Planetfall.Sim.Core;
+using Planetfall.Sim.MapGen;
+using Planetfall.Sim.Presentation;
 using Planetfall.Sim.Systems;
 using Planetfall.Sim.World;
 
@@ -22,7 +24,7 @@ public partial class Match : Node2D
     private const int AutosaveEveryTicks = 3000;      // five minutes
     private const int AutosaveSlots = 3;
 
-    private enum Screen { Menu, Playing, Loading }
+    private enum Screen { Menu, Playing, Loading, Sheet }
 
     private Screen _screen = Screen.Menu;
     private SoloMatch _m = null!;
@@ -60,6 +62,8 @@ public partial class Match : Node2D
     {
         _font = ThemeDB.FallbackFont;
         LoadBindings();
+        LoadSettings();
+        InitAudio();
         _seedText = "";
         string auto = System.Environment.GetEnvironmentVariable("PLANETFALL_AUTOSTART") ?? "";
         if (DisplayServer.GetName() == "headless" || auto != "")      // CI smoke test and scripted runs skip the menu
@@ -69,6 +73,7 @@ public partial class Match : Node2D
             if (int.TryParse(System.Environment.GetEnvironmentVariable("PLANETFALL_SPEED"), out int sp)) _speed = Math.Clamp(sp, 1, 40);
             GD.Print($"Planetfall sim match started: seed {_seed}, {_s.Map.TileCount} tiles");   // CI greps "Planetfall sim "
         }
+        else if (System.Environment.GetEnvironmentVariable("PLANETFALL_SHEET") == "1") _screen = Screen.Sheet;
         else GD.Print("Planetfall sim menu ready");
     }
 
@@ -97,6 +102,9 @@ public partial class Match : Node2D
         _seenEnemy.Clear();
         _nextAutosave = (m.State.Tick / AutosaveEveryTicks + 1) * AutosaveEveryTicks;
         _zoom = 1f;
+        _flash.Clear();
+        _music = new MusicDirector();
+        BuildEdges();
         CentreOn(m.State.Players[0].Capital);
     }
 
@@ -132,6 +140,7 @@ public partial class Match : Node2D
     {
         PollLoad();
         if (_selfTest != 0) SelfTestStep();
+        UpdateAudio(delta);
         if (_screen == Screen.Playing)
         {
             bool frozen = _paused || _menuOpen || _settingsOpen;
@@ -146,6 +155,7 @@ public partial class Match : Node2D
                     _pending.Clear();
                     foreach (var ev in _m.Step(cmds)) OnEvent(ev);
                     ScanAlerts();
+                    SenseMusic();
                     if (_s.Tick >= _nextAutosave) { Autosave(); _nextAutosave += AutosaveEveryTicks; }
                 }
             }
@@ -328,7 +338,7 @@ public partial class Match : Node2D
     private bool ClickButtons(Vector2 pos)
     {
         for (int i = _buttons.Count - 1; i >= 0; i--)
-            if (_buttons[i].rect.HasPoint(pos)) { _buttons[i].act(); return true; }
+            if (_buttons[i].rect.HasPoint(pos)) { Sfx("click"); _buttons[i].act(); return true; }
         return false;
     }
 

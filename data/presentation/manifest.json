@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "note": "Everything below is generated in code (sim/Presentation). No binary art or audio files ship yet; see docs/ART.md for the brief that real assets must meet.",
+  "palette": {
+    "you": [0, 114, 178],
+    "rival": [213, 94, 0],
+    "minor": [240, 228, 66],
+    "neutral": [40, 43, 50]
+  },
+  "glyphs": ["infantry", "armor", "artillery", "recon", "engineer"],
+  "music": ["calm", "tense", "battle"],
+  "sfx": ["click", "recruit", "capture", "lost", "alert", "hit", "victory", "defeat", "gift"]
+}

@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Godot;
 using Planetfall.Sim.Ai;
 using Planetfall.Sim.Core;
+using Planetfall.Sim.Presentation;
 
 namespace Planetfall;
 
@@ -156,7 +157,7 @@ public partial class Match
         var card = new Rect2(W / 2 - 330, 210, 320, 150);
         DrawRect(card, new Color(0.08f, 0.12f, 0.18f));
         DrawRect(card, new Color(0.5f, 0.8f, 1f, 0.9f), false, 2f);
-        DrawRect(new Rect2(card.Position + new Vector2(12, 12), new Vector2(64, 64)), new Color(0.2f, 0.45f, 0.85f));       // portrait placeholder
+        DrawPortrait(new Rect2(card.Position + new Vector2(12, 12), new Vector2(64, 64)));
         DrawString(_font, card.Position + new Vector2(90, 34), "Field Commander", HorizontalAlignment.Left, 220, 20, Colors.White);
         DrawString(_font, card.Position + new Vector2(90, 58), "No bonuses. The standard", HorizontalAlignment.Left, 220, 13, new Color(1, 1, 1, 0.7f));
         DrawString(_font, card.Position + new Vector2(90, 76), "leader for every match.", HorizontalAlignment.Left, 220, 13, new Color(1, 1, 1, 0.7f));
@@ -179,6 +180,52 @@ public partial class Match
         Button(new Rect2(W / 2 - 150, y + 108, 300, 44), "Settings and key bindings", () => _settingsOpen = true, new Color(0.12f, 0.2f, 0.3f), 18);
         Button(new Rect2(W / 2 - 150, y + 162, 300, 44), "Quit", () => GetTree().Quit(), null, 18);
         if (_menuNote != "") DrawString(_font, new Vector2(0, y + 240), _menuNote, HorizontalAlignment.Center, W, 15, Bad);
+    }
+
+    /// <summary>Placeholder leader portrait: a head-and-shoulders silhouette on a card, to be replaced by real art.</summary>
+    private void DrawPortrait(Rect2 r)
+    {
+        DrawRect(r, ColorOf(0).Darkened(0.55f));
+        var c = r.GetCenter();
+        DrawCircle(c + new Vector2(0, -8), r.Size.X * 0.2f, ColorOf(0).Lightened(0.25f));
+        var shoulders = new Vector2[8];
+        for (int i = 0; i < 8; i++)
+        {
+            float a = Mathf.Pi + Mathf.Pi * i / 7f;
+            shoulders[i] = new Vector2(c.X + Mathf.Cos(a) * r.Size.X * 0.42f, r.End.Y + Mathf.Sin(a) * r.Size.Y * 0.42f * -1f * -1f);
+        }
+        DrawColoredPolygon(shoulders.Select(v => new Vector2(v.X, Math.Min(v.Y, r.End.Y))).Append(new Vector2(c.X + r.Size.X * 0.42f, r.End.Y)).Append(new Vector2(c.X - r.Size.X * 0.42f, r.End.Y)).ToArray(),
+            ColorOf(0).Lightened(0.25f));
+        DrawRect(r, new Color(1, 1, 1, 0.4f), false, 1f);
+    }
+
+    /// <summary>Contact sheet (PLANETFALL_SHEET=1): every role glyph in every owner colour under each kind of colour vision.</summary>
+    private void DrawSheet()
+    {
+        DrawString(_font, new Vector2(20, 34), "GLYPH CONTACT SHEET - owners: you, rival, natives; roles: infantry, armor, artillery, recon, engineer", HorizontalAlignment.Left, W - 40, 18, Colors.White);
+        string[] roles = { "infantry", "armor", "artillery", "recon", "engineer" };
+        int row = 0;
+        foreach (Cvd kind in Enum.GetValues<Cvd>())
+        {
+            float y = 60 + row * 160;
+            DrawString(_font, new Vector2(20, y + 18), kind.ToString(), HorizontalAlignment.Left, 200, 16, new Color(1f, 0.95f, 0.6f));
+            for (int owner = 0; owner < 3; owner++)
+                for (int k = 0; k < roles.Length; k++)
+                {
+                    var cell = new Rect2(20 + (owner * roles.Length + k) * 80, y + 28, 72, 72);
+                    var fill = Gd(Palette.Simulate(Palette.TileFill(owner), kind));
+                    var disc = Gd(Palette.Simulate(Palette.OwnerColor(owner), kind));
+                    DrawRect(cell, fill);
+                    DrawCircle(cell.GetCenter(), 30, disc);
+                    DrawArc(cell.GetCenter(), 30, 0, Mathf.Tau, 24, Colors.Black, 1.5f);
+                    DrawGlyph(cell.GetCenter(), 17, roles[k], Colors.White, 3f);
+                }
+            DrawRect(new Rect2(20, y + 108, 1200, 22), new Color(0, 0, 0, 0.25f));
+            var neutral = Gd(Palette.Simulate(Palette.Neutral, kind));
+            DrawRect(new Rect2(24, y + 111, 60, 16), neutral);
+            DrawString(_font, new Vector2(92, y + 124), "neutral ground", HorizontalAlignment.Left, 200, 12, new Color(1, 1, 1, 0.7f));
+            row++;
+        }
     }
 
     private void DrawLoading()
@@ -249,6 +296,9 @@ public partial class Match
         }
 
         float by = y + half * rowH + 14;
+        Button(new Rect2(p.Position.X + 20, by, 190, 28), $"Music volume: {VolText(_musicVol)}", () => { _musicVol = NextVol(_musicVol); SaveSettings(); }, new Color(0.12f, 0.2f, 0.3f), 13);
+        Button(new Rect2(p.Position.X + 230, by, 190, 28), $"Effects volume: {VolText(_sfxVol)}", () => { _sfxVol = NextVol(_sfxVol); SaveSettings(); Sfx("recruit"); }, new Color(0.12f, 0.2f, 0.3f), 13);
+        by += 36;
         if (_menuNote != "") DrawString(_font, new Vector2(p.Position.X + 20, by + 8), _menuNote, HorizontalAlignment.Left, 620, 14, Info);
         Button(new Rect2(p.Position.X + 20, by + 24, 200, 34), "Reset to defaults", () => { _keys.Reset(); SaveBindings(); _menuNote = "Defaults restored."; }, null, 14);
         Button(new Rect2(p.End.X - 140, by + 24, 120, 34), "Done", () => { _settingsOpen = false; _rebinding = ""; _menuNote = ""; }, new Color(0.15f, 0.3f, 0.2f), 16);
